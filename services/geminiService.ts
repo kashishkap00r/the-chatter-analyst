@@ -1,0 +1,214 @@
+import { ChatterAnalysisResult, ModelType, PointsAndFiguresResult, SelectedSlide } from "../types";
+
+const CHATTER_ANALYZE_ENDPOINT = "/api/chatter/analyze";
+const POINTS_ANALYZE_ENDPOINT = "/api/points/analyze";
+
+interface ApiErrorPayload {
+  error?: {
+    code?: string;
+    message?: string;
+  };
+  message?: string;
+}
+
+interface PointsAnalyzeApiSlide {
+  selectedPageNumber: number;
+  whyThisSlide: string;
+  whatThisSlideReveals: string;
+}
+
+interface PointsAnalyzeApiResult {
+  companyName: string;
+  fiscalPeriod: string;
+  slides: PointsAnalyzeApiSlide[];
+}
+
+const parseApiErrorMessage = async (response: Response): Promise<string> => {
+  let fallbackMessage = `Request failed with status ${response.status}.`;
+
+  try {
+    const payload = (await response.json()) as ApiErrorPayload;
+    if (payload?.error?.message) {
+      return payload.error.message;
+    }
+    if (payload?.message) {
+      return payload.message;
+    }
+  } catch {
+    // Ignore invalid JSON and fall back to status text.
+  }
+
+  if (response.statusText) {
+    fallbackMessage = `${fallbackMessage} ${response.statusText}`;
+  }
+
+  return fallbackMessage;
+};
+
+const postJson = async <T>(url: string, body: unknown): Promise<T> => {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const message = await parseApiErrorMessage(response);
+    throw new Error(message);
+  }
+
+  try {
+    return (await response.json()) as T;
+  } catch {
+    throw new Error("Server returned invalid JSON.");
+  }
+};
+
+// --- PDF Processing ---
+
+const getPdfDocument = async (file: File) => {
+  // @ts-ignore
+  if (typeof window === "undefined" || !window.pdfjsLib) {
+    throw new Error("PDF processing library is not loaded.");
+  }
+  // @ts-ignore
+  const pdfjsLib = window.pdfjsLib;
+  if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  }
+  const arrayBuffer = await file.arrayBuffer();
+  const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+  loadingTask.onPassword = () => {
+    throw new Error("Password protected PDFs are not supported.");
+  };
+  return loadingTask.promise;
+};
+
+export const parsePdfToText = async (file: File): Promise<string> => {
+  if (file.size > 10 * 1024 * 1024) {
+    throw new Error("PDF file is too large (max 10MB).");
+  }
+  const pdf = await getPdfDocument(file);
+  const maxPages = 80;
+  if (pdf.numPages > maxPages) {
+    throw new Error(`PDF is too long (${pdf.numPages} pages).`);
+  }
+
+  let fullText = "";
+  for (let i = 1; i <= pdf.numPages; i++) {
+    try {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      // @ts-ignore
+      const pageText = textContent.items.map((item) => item.str).join(" ");
+      fullText += `--- Page ${i} ---\n${pageText}\n\n`;
+    } catch {
+      fullText += `--- Page ${i} [Extraction Failed] ---\n\n`;
+    }
+  }
+
+  if (fullText.length < 50) {
+    throw new Error("PDF appears empty or contains only images.");
+  }
+
+  return fullText;
+};
+
+export const convertPdfToImages = async (file: File, onProgress: (msg: string) => void): Promise<string[]> => {
+  if (file.size > 25 * 1024 * 1024) {
+    throw new Error("Presentation PDF is too large (max 25MB).");
+  }
+
+  const pdf = await getPdfDocument(file);
+
+  const maxPagesForImages = 60;
+  if (pdf.numPages > maxPagesForImages) {
+    throw new Error(`Presentation is too long (${pdf.numPages} pages, max ${maxPagesForImages}).`);
+  }
+
+  const imagePromises: Promise<string>[] = [];
+  onProgress(`Converting ${pdf.numPages} pages to images...`);
+
+  const pages = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    pages.push(await pdf.getPage(i));
+  }
+
+  await Promise.all(
+    pages.map(async (page, index) => {
+      const i = index + 1;
+      const viewport = page.getViewport({ scale: 1.5 });
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+      canvas.height = viewport.height;
+      canvas.width = viewport.width;
+
+      if (context) {
+        await page.render({ canvasContext: context, viewport }).promise;
+        imagePromises[index] = Promise.resolve(canvas.toDataURL("image/jpeg", 0.8));
+      }
+      onProgress(`Converted page ${i} of ${pdf.numPages}`);
+    }),
+  );
+
+  return Promise.all(imagePromises);
+};
+
+// --- "The Chatter" Analysis ---
+
+export const analyzeTranscript = async (
+  transcript: string,
+  modelId: ModelType = ModelType.FLASH,
+): Promise<ChatterAnalysisResult> => {
+  if (!transcript.trim()) {
+    throw new Error("Transcript is empty.");
+  }
+
+  return postJson<ChatterAnalysisResult>(CHATTER_ANALYZE_ENDPOINT, {
+    transcript,
+    model: modelId,
+  });
+};
+
+// --- "Points & Figures" Analysis ---
+
+export const analyzePresentation = async (
+  pageImages: string[],
+  onProgress: (msg: string) => void,
+): Promise<PointsAndFiguresResult> => {
+  if (!Array.isArray(pageImages) || pageImages.length === 0) {
+    throw new Error("No presentation pages found to analyze.");
+  }
+
+  onProgress("Analyzing slides with AI...");
+  const result = await postJson<PointsAnalyzeApiResult>(POINTS_ANALYZE_ENDPOINT, { pageImages });
+
+  if (!result.slides || result.slides.length === 0) {
+    throw new Error("AI did not return any selected slides.");
+  }
+
+  const slidesWithImages: SelectedSlide[] = result.slides
+    .map((slide) => {
+      const pageIndex = slide.selectedPageNumber - 1;
+      if (pageIndex < 0 || pageIndex >= pageImages.length) {
+        return null;
+      }
+      return {
+        ...slide,
+        pageAsImage: pageImages[pageIndex],
+      };
+    })
+    .filter((slide): slide is SelectedSlide => Boolean(slide));
+
+  if (slidesWithImages.length === 0) {
+    throw new Error("AI returned invalid page numbers.");
+  }
+
+  return {
+    companyName: result.companyName,
+    fiscalPeriod: result.fiscalPeriod,
+    slides: slidesWithImages,
+  };
+};
