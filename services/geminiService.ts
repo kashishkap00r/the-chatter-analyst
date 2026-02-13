@@ -1,7 +1,6 @@
-import { ChatterAnalysisResult, ChatterLinkFailure, ModelType, PointsAndFiguresResult, SelectedSlide } from "../types";
+import { ChatterAnalysisResult, ModelType, PointsAndFiguresResult, SelectedSlide } from "../types";
 
 const CHATTER_ANALYZE_ENDPOINT = "/api/chatter/analyze";
-const CHATTER_ANALYZE_LINKS_ENDPOINT = "/api/chatter/analyze-links";
 const POINTS_ANALYZE_ENDPOINT = "/api/points/analyze";
 
 interface ApiErrorPayload {
@@ -22,11 +21,6 @@ interface PointsAnalyzeApiResult {
   companyName: string;
   fiscalPeriod: string;
   slides: PointsAnalyzeApiSlide[];
-}
-
-interface ChatterAnalyzeLinksApiResult {
-  results: ChatterAnalysisResult[];
-  failures: ChatterLinkFailure[];
 }
 
 const parseApiErrorMessage = async (response: Response): Promise<string> => {
@@ -174,27 +168,6 @@ export const analyzeTranscript = async (
 
   return postJson<ChatterAnalysisResult>(CHATTER_ANALYZE_ENDPOINT, {
     transcript,
-    model: modelId,
-  });
-};
-
-export const analyzeConcallLinks = async (
-  links: string[],
-  modelId: ModelType = ModelType.FLASH,
-): Promise<ChatterAnalyzeLinksApiResult> => {
-  if (!Array.isArray(links) || links.length === 0) {
-    throw new Error("At least one concall link is required.");
-  }
-
-  const normalizedLinks = links
-    .map((link) => String(link || "").trim())
-    .filter(Boolean);
-  if (normalizedLinks.length === 0) {
-    throw new Error("At least one valid concall link is required.");
-  }
-
-  return postJson<ChatterAnalyzeLinksApiResult>(CHATTER_ANALYZE_LINKS_ENDPOINT, {
-    links: normalizedLinks,
     model: modelId,
   });
 };

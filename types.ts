@@ -29,14 +29,9 @@ export interface ChatterAnalysisResult {
   marketCapCategory: string;
   industry: string;
   companyDescription: string;
-  zerodhaStockUrl: string;
-  concallUrl: string;
+  zerodhaStockUrl?: string;
+  concallUrl?: string;
   quotes: ExtractedQuote[];
-}
-
-export interface ChatterLinkFailure {
-  link: string;
-  reason: string;
 }
 
 export interface ChatterAnalysisState {
