@@ -25,6 +25,11 @@ export interface ExtractedQuote {
 export interface ChatterAnalysisResult {
   companyName: string;
   fiscalPeriod: string;
+  marketCapCategory: string;
+  industry: string;
+  companyDescription: string;
+  zerodhaStockUrl: string;
+  concallUrl: string;
   quotes: ExtractedQuote[];
 }
 

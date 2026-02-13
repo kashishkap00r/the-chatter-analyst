@@ -12,6 +12,11 @@ export const CHATTER_RESPONSE_SCHEMA = {
   properties: {
     companyName: { type: "STRING" },
     fiscalPeriod: { type: "STRING" },
+    marketCapCategory: { type: "STRING" },
+    industry: { type: "STRING" },
+    companyDescription: { type: "STRING" },
+    zerodhaStockUrl: { type: "STRING" },
+    concallUrl: { type: "STRING" },
     quotes: {
       type: "ARRAY",
       items: {
@@ -47,7 +52,16 @@ export const CHATTER_RESPONSE_SCHEMA = {
       },
     },
   },
-  required: ["companyName", "fiscalPeriod", "quotes"],
+  required: [
+    "companyName",
+    "fiscalPeriod",
+    "marketCapCategory",
+    "industry",
+    "companyDescription",
+    "zerodhaStockUrl",
+    "concallUrl",
+    "quotes",
+  ],
 };
 
 export const POINTS_RESPONSE_SCHEMA = {
@@ -77,9 +91,12 @@ You are a research analyst for "The Chatter | India Edition," a bi-weekly newsle
 
 CORE MISSION
 1. Identify the Company Name and the Fiscal Period (for example, "Q3 FY25").
-2. Extract no more than twenty management remarks that are material to investors.
-3. Ensure at least five of these remarks are from management answers in the Q&A section.
-4. For each remark, provide:
+2. Determine the market cap category and industry as shown on Zerodha stock pages.
+3. Provide a concise 2-sentence description of the company.
+4. Provide a canonical Zerodha stock URL and a concall transcript URL.
+5. Extract no more than twenty management remarks that are material to investors.
+6. Ensure at least five of these remarks are from management answers in the Q&A section.
+7. For each remark, provide:
    a. The verbatim quote.
    b. A one-sentence summary of the implication for an investor.
    c. Speaker name and designation.
@@ -87,6 +104,9 @@ CORE MISSION
 RULES
 - Prioritize insightful answers to analyst questions from Q&A.
 - Prioritize surprise factors and strategic shifts.
+- Use market cap labels like Large Cap, Mid Cap, Small Cap, or Micro Cap.
+- Keep companyDescription factual and concise.
+- zerodhaStockUrl and concallUrl must be absolute https URLs. If unknown, return "N/A".
 - Return valid JSON only.
 `.trim();
 

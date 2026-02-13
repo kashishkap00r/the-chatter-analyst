@@ -1,9 +1,10 @@
 import React, { useState, useCallback, useRef } from 'react';
 import { analyzeTranscript, parsePdfToText, analyzePresentation, convertPdfToImages } from './services/geminiService';
-import { ModelType, type AppMode, type ChatterAnalysisState, type BatchFile, type PointsAnalysisState } from './types';
+import { ModelType, type AppMode, type ChatterAnalysisResult, type ChatterAnalysisState, type BatchFile, type PointsAnalysisState } from './types';
 import QuoteCard from './components/QuoteCard';
 import LoadingState from './components/LoadingState';
 import PointsCard from './components/PointsCard';
+import { buildChatterClipboardExport } from './utils/chatterCopyExport';
 
 const App: React.FC = () => {
   const [appMode, setAppMode] = useState<AppMode>('chatter');
@@ -15,6 +16,8 @@ const App: React.FC = () => {
   const [batchFiles, setBatchFiles] = useState<BatchFile[]>([]);
   const [isAnalyzingBatch, setIsAnalyzingBatch] = useState(false);
   const [chatterSingleState, setChatterSingleState] = useState<ChatterAnalysisState>({ status: 'idle' });
+  const [copyAllStatus, setCopyAllStatus] = useState<'idle' | 'copied' | 'error'>('idle');
+  const [copyAllErrorMessage, setCopyAllErrorMessage] = useState('');
 
   // State for "Points & Figures"
   const [pointsFile, setPointsFile] = useState<File | null>(null);
@@ -110,19 +113,80 @@ const App: React.FC = () => {
 
 
   // --- General Handlers ---
+  const getCompletedChatterResults = useCallback((): ChatterAnalysisResult[] => {
+    const results: ChatterAnalysisResult[] = [];
+    if (chatterSingleState.status === 'complete' && chatterSingleState.result) {
+      results.push(chatterSingleState.result);
+    }
+    batchFiles.forEach((file) => {
+      if (file.result) {
+        results.push(file.result);
+      }
+    });
+    return results;
+  }, [batchFiles, chatterSingleState]);
+
+  const handleCopyAllChatter = useCallback(async () => {
+    const completedResults = getCompletedChatterResults();
+    if (completedResults.length === 0) {
+      return;
+    }
+
+    const { html, text } = buildChatterClipboardExport(completedResults);
+    const clipboard = navigator?.clipboard;
+    if (!clipboard) {
+      setCopyAllStatus('error');
+      setCopyAllErrorMessage('Clipboard API is not available in this browser.');
+      setTimeout(() => setCopyAllStatus('idle'), 4000);
+      return;
+    }
+
+    try {
+      const ClipboardItemCtor = (window as any).ClipboardItem;
+      if (ClipboardItemCtor && window.isSecureContext) {
+        const clipboardItem = new ClipboardItemCtor({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([text], { type: 'text/plain' }),
+        });
+        await clipboard.write([clipboardItem]);
+      } else {
+        await clipboard.writeText(text);
+      }
+      setCopyAllStatus('copied');
+      setCopyAllErrorMessage('');
+      setTimeout(() => setCopyAllStatus('idle'), 2000);
+    } catch {
+      try {
+        await clipboard.writeText(text);
+        setCopyAllStatus('copied');
+        setCopyAllErrorMessage('');
+        setTimeout(() => setCopyAllStatus('idle'), 2000);
+      } catch (fallbackError: any) {
+        setCopyAllStatus('error');
+        setCopyAllErrorMessage(fallbackError?.message || 'Copy failed. Please allow clipboard access.');
+        setTimeout(() => setCopyAllStatus('idle'), 4000);
+      }
+    }
+  }, [getCompletedChatterResults]);
+
   const removeBatchFile = (id: string) => setBatchFiles(prev => prev.filter(f => f.id !== id));
   
   const clearAll = () => {
       setBatchFiles([]);
       setTextInput('');
       setChatterSingleState({ status: 'idle' });
+      setCopyAllStatus('idle');
+      setCopyAllErrorMessage('');
       setPointsFile(null);
       setPointsState({ status: 'idle' });
       if (fileInputRef.current) fileInputRef.current.value = '';
   };
   
-  const renderChatterUI = () => (
-    <>
+  const renderChatterUI = () => {
+    const completedResults = getCompletedChatterResults();
+
+    return (
+      <>
       <div className="lg:col-span-5 flex flex-col lg:sticky lg:top-24 lg:max-h-[calc(100vh-8rem)] h-auto">
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col h-full min-h-[500px] lg:min-h-0">
           <div className="flex justify-between items-center mb-4 shrink-0">
@@ -162,6 +226,24 @@ const App: React.FC = () => {
         </div>
       </div>
       <div className="lg:col-span-7 space-y-8">
+        {completedResults.length > 0 && (
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-gray-600">
+              {completedResults.length} compan{completedResults.length === 1 ? 'y' : 'ies'} ready for newsletter export
+            </p>
+            <button
+              onClick={handleCopyAllChatter}
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                copyAllStatus === 'copied' ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : 'bg-gray-900 text-white'
+              }`}
+            >
+              {copyAllStatus === 'copied' ? 'Copied All' : 'Copy All'}
+            </button>
+          </div>
+        )}
+        {copyAllStatus === 'error' && copyAllErrorMessage && (
+          <div className="bg-red-100 p-4 rounded-lg text-sm text-red-800">{copyAllErrorMessage}</div>
+        )}
         {chatterSingleState.status === 'idle' && batchFiles.length === 0 && <div className="text-center p-12 border-2 border-dashed rounded-xl"><h3 className="text-xl font-serif">Ready to Analyze Transcripts</h3></div>}
         {chatterSingleState.status === 'analyzing' && <LoadingState />}
         {chatterSingleState.status === 'error' && <div className="bg-red-100 p-4 rounded-lg">{chatterSingleState.errorMessage}</div>}
@@ -169,7 +251,8 @@ const App: React.FC = () => {
         {batchFiles.map(file => file.result && <div key={file.id}> <h2 className="text-2xl font-bold mb-4">{file.result.companyName}</h2> {file.result.quotes.map((q, i) => <QuoteCard key={`${file.id}-${i}`} quoteData={q} index={i} />)} </div>)}
       </div>
     </>
-  );
+    );
+  };
 
   const renderPointsUI = () => (
     <>
