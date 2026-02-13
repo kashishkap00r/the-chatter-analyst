@@ -25,12 +25,18 @@ export interface ExtractedQuote {
 export interface ChatterAnalysisResult {
   companyName: string;
   fiscalPeriod: string;
+  nseScrip: string;
   marketCapCategory: string;
   industry: string;
   companyDescription: string;
   zerodhaStockUrl: string;
   concallUrl: string;
   quotes: ExtractedQuote[];
+}
+
+export interface ChatterLinkFailure {
+  link: string;
+  reason: string;
 }
 
 export interface ChatterAnalysisState {

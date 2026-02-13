@@ -12,11 +12,10 @@ export const CHATTER_RESPONSE_SCHEMA = {
   properties: {
     companyName: { type: "STRING" },
     fiscalPeriod: { type: "STRING" },
+    nseScrip: { type: "STRING" },
     marketCapCategory: { type: "STRING" },
     industry: { type: "STRING" },
     companyDescription: { type: "STRING" },
-    zerodhaStockUrl: { type: "STRING" },
-    concallUrl: { type: "STRING" },
     quotes: {
       type: "ARRAY",
       items: {
@@ -55,11 +54,10 @@ export const CHATTER_RESPONSE_SCHEMA = {
   required: [
     "companyName",
     "fiscalPeriod",
+    "nseScrip",
     "marketCapCategory",
     "industry",
     "companyDescription",
-    "zerodhaStockUrl",
-    "concallUrl",
     "quotes",
   ],
 };
@@ -91,9 +89,9 @@ You are a research analyst for "The Chatter | India Edition," a bi-weekly newsle
 
 CORE MISSION
 1. Identify the Company Name and the Fiscal Period (for example, "Q3 FY25").
-2. Determine the market cap category and industry as shown on Zerodha stock pages.
-3. Provide a concise 2-sentence description of the company.
-4. Provide a canonical Zerodha stock URL and a concall transcript URL.
+2. Identify the NSE trading scrip used in Zerodha URLs (for example, SBIN, RELIANCE, HDFCBANK).
+3. Determine the market cap category and industry as shown on Zerodha stock pages.
+4. Provide a concise 2-sentence description of the company.
 5. Extract no more than twenty management remarks that are material to investors.
 6. Ensure at least five of these remarks are from management answers in the Q&A section.
 7. For each remark, provide:
@@ -106,7 +104,7 @@ RULES
 - Prioritize surprise factors and strategic shifts.
 - Use market cap labels like Large Cap, Mid Cap, Small Cap, or Micro Cap.
 - Keep companyDescription factual and concise.
-- zerodhaStockUrl and concallUrl must be absolute https URLs. If unknown, return "N/A".
+- nseScrip must be uppercase and should only contain A-Z and 0-9 characters.
 - Return valid JSON only.
 `.trim();
 

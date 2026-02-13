@@ -27,6 +27,20 @@ const isHttpUrl = (value: string): boolean => {
   }
 };
 
+const normalizeScrip = (value: string | undefined): string =>
+  normalizeValue(value, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+
+const getDeterministicZerodhaUrl = (result: ChatterAnalysisResult): string => {
+  const scrip = normalizeScrip(result.nseScrip);
+  if (scrip) {
+    return `https://zerodha.com/markets/stocks/NSE/${encodeURIComponent(scrip)}/`;
+  }
+  const fallbackUrl = normalizeValue(result.zerodhaStockUrl, "");
+  return isHttpUrl(fallbackUrl) ? fallbackUrl : "";
+};
+
 const getSpeakerLine = (name: string, designation: string): string => {
   const normalizedName = normalizeValue(name);
   const normalizedDesignation = normalizeValue(designation);
@@ -52,14 +66,14 @@ const buildHeaderText = (result: ChatterAnalysisResult): string => {
 const buildCompanyHtml = (result: ChatterAnalysisResult): string => {
   const heading = escapeHtml(buildHeaderText(result));
   const companyDescription = escapeHtml(normalizeValue(result.companyDescription, "Company description not available."));
-  const zerodhaUrl = normalizeValue(result.zerodhaStockUrl);
+  const zerodhaUrl = getDeterministicZerodhaUrl(result);
   const concallUrl = normalizeValue(result.concallUrl);
   const headingHtml = isHttpUrl(zerodhaUrl)
     ? `<a href="${escapeHtml(zerodhaUrl)}" style="color:#1155cc;text-decoration:underline;">${heading}</a>`
     : heading;
   const concallHtml = isHttpUrl(concallUrl)
     ? `[<a href="${escapeHtml(concallUrl)}" style="color:#1155cc;text-decoration:underline;">Concall</a>]`
-    : `[Concall: ${escapeHtml(concallUrl)}]`;
+    : `[Concall]`;
 
   const quotesHtml = result.quotes
     .map((quote) => {
@@ -89,7 +103,7 @@ const buildCompanyText = (result: ChatterAnalysisResult): string => {
   const header = buildHeaderText(result);
   const description = normalizeValue(result.companyDescription, "Company description not available.");
   const concallUrl = normalizeValue(result.concallUrl);
-  const concallLine = isHttpUrl(concallUrl) ? `[Concall] ${concallUrl}` : `[Concall: ${concallUrl}]`;
+  const concallLine = isHttpUrl(concallUrl) ? `[Concall] ${concallUrl}` : `[Concall]`;
 
   const quoteBlocks = result.quotes.map((quote) => {
     const summary = normalizeValue(quote.summary);
