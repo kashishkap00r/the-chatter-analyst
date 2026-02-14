@@ -11,13 +11,15 @@ import {
   type BatchFile,
   type ChatterAnalysisResult,
   type ChatterAnalysisState,
-  type PointsAnalysisState,
+  type PointsAndFiguresResult,
+  type PointsBatchFile,
   type ProgressEvent,
 } from './types';
 import QuoteCard from './components/QuoteCard';
 import PointsCard from './components/PointsCard';
 import AnalysisProgressPanel from './components/AnalysisProgressPanel';
 import { buildChatterClipboardExport } from './utils/chatterCopyExport';
+import { buildPointsClipboardExport } from './utils/pointsCopyExport';
 
 interface BatchProgressState {
   total: number;
@@ -118,8 +120,11 @@ const App: React.FC = () => {
   const [copyAllStatus, setCopyAllStatus] = useState<'idle' | 'copied' | 'error'>('idle');
   const [copyAllErrorMessage, setCopyAllErrorMessage] = useState('');
 
-  const [pointsFile, setPointsFile] = useState<File | null>(null);
-  const [pointsState, setPointsState] = useState<PointsAnalysisState>({ status: 'idle' });
+  const [pointsBatchFiles, setPointsBatchFiles] = useState<PointsBatchFile[]>([]);
+  const [isAnalyzingPointsBatch, setIsAnalyzingPointsBatch] = useState(false);
+  const [pointsBatchProgress, setPointsBatchProgress] = useState<BatchProgressState | null>(null);
+  const [pointsCopyAllStatus, setPointsCopyAllStatus] = useState<'idle' | 'copied' | 'error'>('idle');
+  const [pointsCopyAllErrorMessage, setPointsCopyAllErrorMessage] = useState('');
 
   const chatterFileInputRef = useRef<HTMLInputElement>(null);
   const pointsFileInputRef = useRef<HTMLInputElement>(null);
@@ -139,6 +144,10 @@ const App: React.FC = () => {
 
     return results;
   }, [batchFiles, chatterSingleState]);
+
+  const getCompletedPointsResults = useCallback((): PointsAndFiguresResult[] => {
+    return pointsBatchFiles.filter((file) => file.result).map((file) => file.result!) as PointsAndFiguresResult[];
+  }, [pointsBatchFiles]);
 
   const handleAnalyzeText = useCallback(async () => {
     if (!textInput.trim()) return;
@@ -332,84 +341,146 @@ const App: React.FC = () => {
   };
 
   const handlePointsFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+    const files = event.target.files;
+    if (!files) return;
 
-    if (file && file.type === 'application/pdf') {
-      setPointsFile(file);
-      setPointsState({ status: 'idle' });
-      return;
-    }
+    const timestamp = Date.now();
+    const sourceFiles = Array.from(files) as File[];
+    const mappedFiles = sourceFiles.map((file, index): PointsBatchFile => {
+      const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+      return {
+        id: `${file.name}-${timestamp}-${index}`,
+        name: file.name,
+        file,
+        status: isPdf ? 'ready' : 'error',
+        error: isPdf ? undefined : 'Only PDF files are supported for presentations.',
+      };
+    });
 
-    if (file) {
-      setPointsFile(null);
-      setPointsState({
-        status: 'error',
-        errorMessage: 'Only PDF files are supported for presentations.',
-        progress: { stage: 'error', message: 'Unsupported file format.', percent: 100 },
-      });
+    setPointsBatchFiles((prev) => [...prev, ...mappedFiles]);
+    if (pointsFileInputRef.current) {
+      pointsFileInputRef.current.value = '';
     }
   };
 
-  const handleAnalyzePresentation = useCallback(async () => {
-    if (!pointsFile) return;
+  const handleAnalyzePointsBatch = useCallback(async () => {
+    const pendingIndexes = pointsBatchFiles
+      .map((file, index) => (file.status === 'ready' ? index : -1))
+      .filter((index) => index !== -1);
 
-    setPointsState({
-      status: 'parsing',
-      progressMessage: 'Preparing PDF...',
+    if (pendingIndexes.length === 0) return;
+
+    setPointsCopyAllStatus('idle');
+    setPointsCopyAllErrorMessage('');
+    setIsAnalyzingPointsBatch(true);
+
+    const nextFiles = [...pointsBatchFiles];
+    const getCounts = () => ({
+      completed: pendingIndexes.filter((index) => nextFiles[index].status === 'complete').length,
+      failed: pendingIndexes.filter((index) => nextFiles[index].status === 'error').length,
+    });
+
+    setPointsBatchProgress({
+      total: pendingIndexes.length,
+      completed: 0,
+      failed: 0,
       progress: {
         stage: 'preparing',
-        message: 'Preparing PDF...',
-        percent: 8,
+        message: 'Starting presentation analysis...',
+        percent: 0,
       },
     });
 
-    const onProgress = (message: string) => {
-      const progress = mapPointsProgress(message);
-      setPointsState((prev) => ({
-        ...prev,
-        status: progress.stage === 'analyzing' ? 'analyzing' : 'parsing',
-        progressMessage: message,
-        progress,
-      }));
-    };
+    for (let queueIndex = 0; queueIndex < pendingIndexes.length; queueIndex++) {
+      const fileIndex = pendingIndexes[queueIndex];
+      const currentFile = nextFiles[fileIndex];
 
-    try {
-      const pageImages = await convertPdfToImages(pointsFile, onProgress);
-      setPointsState((prev) => ({
-        ...prev,
+      nextFiles[fileIndex] = {
+        ...currentFile,
         status: 'analyzing',
-        progressMessage: 'Analyzing slides with AI...',
+        error: undefined,
         progress: {
-          stage: 'analyzing',
-          message: 'Analyzing slides with AI...',
-          percent: 80,
+          stage: 'preparing',
+          message: 'Preparing presentation...',
+          percent: 8,
         },
-      }));
+      };
+      setPointsBatchFiles([...nextFiles]);
 
-      const result = await analyzePresentation(pageImages, onProgress);
-      setPointsState({
-        status: 'complete',
-        result,
-        progressMessage: 'Analysis complete.',
+      const onProgress = (message: string) => {
+        const mappedProgress = mapPointsProgress(message);
+        nextFiles[fileIndex] = {
+          ...nextFiles[fileIndex],
+          status: 'analyzing',
+          progress: mappedProgress,
+        };
+        setPointsBatchFiles([...nextFiles]);
+
+        const { completed, failed } = getCounts();
+        const inFileRatio = (mappedProgress.percent ?? 0) / 100;
+        const overallPercent = Math.round(((queueIndex + inFileRatio) / pendingIndexes.length) * 100);
+
+        setPointsBatchProgress({
+          total: pendingIndexes.length,
+          completed,
+          failed,
+          currentLabel: nextFiles[fileIndex].name,
+          progress: {
+            ...mappedProgress,
+            percent: overallPercent,
+          },
+        });
+      };
+
+      try {
+        const pageImages = await convertPdfToImages(nextFiles[fileIndex].file, onProgress);
+        const result = await analyzePresentation(pageImages, onProgress);
+        nextFiles[fileIndex] = {
+          ...nextFiles[fileIndex],
+          status: 'complete',
+          result,
+          progress: {
+            stage: 'complete',
+            message: 'Analysis complete.',
+            percent: 100,
+          },
+        };
+      } catch (error: any) {
+        nextFiles[fileIndex] = {
+          ...nextFiles[fileIndex],
+          status: 'error',
+          error: error?.message || 'Failed to analyze presentation.',
+          progress: {
+            stage: 'error',
+            message: 'Analysis failed.',
+            percent: 100,
+          },
+        };
+      }
+
+      setPointsBatchFiles([...nextFiles]);
+      const { completed, failed } = getCounts();
+      const completedQueueItems = queueIndex + 1;
+
+      setPointsBatchProgress({
+        total: pendingIndexes.length,
+        completed,
+        failed,
+        currentLabel:
+          completedQueueItems < pendingIndexes.length
+            ? nextFiles[pendingIndexes[queueIndex + 1]].name
+            : undefined,
         progress: {
-          stage: 'complete',
-          message: 'Analysis complete.',
-          percent: 100,
-        },
-      });
-    } catch (error: any) {
-      setPointsState({
-        status: 'error',
-        errorMessage: error?.message || 'Failed to analyze presentation.',
-        progressMessage: 'Analysis failed.',
-        progress: {
-          stage: 'error',
-          message: 'Analysis failed.',
-          percent: 100,
+          stage: completedQueueItems < pendingIndexes.length ? 'preparing' : 'complete',
+          message:
+            completedQueueItems < pendingIndexes.length ? 'Loading next presentation...' : 'Batch analysis complete.',
+          percent: Math.round((completedQueueItems / pendingIndexes.length) * 100),
         },
       });
     }
-  }, [pointsFile]);
+
+    setIsAnalyzingPointsBatch(false);
+  }, [pointsBatchFiles]);
 
   const handleCopyAllChatter = useCallback(async () => {
     const completedResults = getCompletedChatterResults();
@@ -454,8 +525,55 @@ const App: React.FC = () => {
     }
   }, [getCompletedChatterResults]);
 
+  const handleCopyAllPoints = useCallback(async () => {
+    const completedResults = getCompletedPointsResults();
+    if (completedResults.length === 0) return;
+
+    const { html, text } = buildPointsClipboardExport(completedResults);
+    const clipboard = navigator?.clipboard;
+
+    if (!clipboard) {
+      setPointsCopyAllStatus('error');
+      setPointsCopyAllErrorMessage('Clipboard API is not available in this browser.');
+      setTimeout(() => setPointsCopyAllStatus('idle'), 3500);
+      return;
+    }
+
+    try {
+      const ClipboardItemCtor = (window as any).ClipboardItem;
+      if (ClipboardItemCtor && window.isSecureContext) {
+        const clipboardItem = new ClipboardItemCtor({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([text], { type: 'text/plain' }),
+        });
+        await clipboard.write([clipboardItem]);
+      } else {
+        await clipboard.writeText(text);
+      }
+
+      setPointsCopyAllStatus('copied');
+      setPointsCopyAllErrorMessage('');
+      setTimeout(() => setPointsCopyAllStatus('idle'), 1800);
+    } catch {
+      try {
+        await clipboard.writeText(text);
+        setPointsCopyAllStatus('copied');
+        setPointsCopyAllErrorMessage('');
+        setTimeout(() => setPointsCopyAllStatus('idle'), 1800);
+      } catch (fallbackError: any) {
+        setPointsCopyAllStatus('error');
+        setPointsCopyAllErrorMessage(fallbackError?.message || 'Copy failed. Please allow clipboard access.');
+        setTimeout(() => setPointsCopyAllStatus('idle'), 3500);
+      }
+    }
+  }, [getCompletedPointsResults]);
+
   const removeBatchFile = (id: string) => {
     setBatchFiles((prev) => prev.filter((file) => file.id !== id));
+  };
+
+  const removePointsBatchFile = (id: string) => {
+    setPointsBatchFiles((prev) => prev.filter((file) => file.id !== id));
   };
 
   const clearAll = () => {
@@ -467,8 +585,11 @@ const App: React.FC = () => {
     setCopyAllStatus('idle');
     setCopyAllErrorMessage('');
 
-    setPointsFile(null);
-    setPointsState({ status: 'idle' });
+    setPointsBatchFiles([]);
+    setIsAnalyzingPointsBatch(false);
+    setPointsBatchProgress(null);
+    setPointsCopyAllStatus('idle');
+    setPointsCopyAllErrorMessage('');
 
     if (chatterFileInputRef.current) chatterFileInputRef.current.value = '';
     if (pointsFileInputRef.current) pointsFileInputRef.current.value = '';
@@ -476,9 +597,11 @@ const App: React.FC = () => {
 
   const completedResults = getCompletedChatterResults();
   const readyCount = batchFiles.filter((file) => file.status === 'ready').length;
+  const completedPointsResults = getCompletedPointsResults();
+  const pointsReadyCount = pointsBatchFiles.filter((file) => file.status === 'ready').length;
   const isTextLoading = chatterSingleState.status === 'analyzing';
   const isChatterLoading = isTextLoading || isAnalyzingBatch;
-  const isPointsLoading = pointsState.status === 'parsing' || pointsState.status === 'analyzing';
+  const isPointsLoading = isAnalyzingPointsBatch;
 
   const renderChatterWorkbench = () => (
     <section className="lg:col-span-5 lg:sticky lg:top-24 self-start">
@@ -714,34 +837,59 @@ const App: React.FC = () => {
         </header>
 
         <div className="relative rounded-xl border-2 border-dashed border-line bg-canvas/45 px-4 py-7 text-center hover:border-brand/45 transition-colors">
-          <p className="text-sm font-medium text-stone">Drop or select presentation file</p>
-          <p className="text-xs text-stone/80 mt-1">PDF only</p>
+          <p className="text-sm font-medium text-stone">Drop or select presentation files</p>
+          <p className="text-xs text-stone/80 mt-1">PDF only, batch supported</p>
           <input
             ref={pointsFileInputRef}
             type="file"
             accept=".pdf"
+            multiple
             onChange={handlePointsFileUpload}
             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
           />
         </div>
 
-        {pointsFile && (
-          <div className="mt-4 rounded-xl border border-line bg-canvas px-3 py-3 flex items-center justify-between gap-3">
-            <p className="text-sm font-semibold text-ink truncate">{pointsFile.name}</p>
-            <button
-              onClick={() => {
-                setPointsFile(null);
-                setPointsState({ status: 'idle' });
-                if (pointsFileInputRef.current) pointsFileInputRef.current.value = '';
-              }}
-              className="text-stone hover:text-rose-700 text-sm leading-none"
-              title="Remove file"
-              aria-label="Remove file"
-            >
-              X
-            </button>
-          </div>
-        )}
+        <div className="mt-4 space-y-2 max-h-[320px] overflow-y-auto pr-1">
+          {pointsBatchFiles.length === 0 && (
+            <div className="rounded-xl border border-line bg-canvas px-4 py-5 text-center text-sm text-stone">
+              No presentation files queued yet.
+            </div>
+          )}
+
+          {pointsBatchFiles.map((file) => (
+            <div key={file.id} className="rounded-xl border border-line bg-white px-3 py-3">
+              <div className="flex items-start gap-3">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-ink truncate">{file.result?.companyName || file.name}</p>
+                  {file.error && <p className="text-xs text-rose-700 mt-1 truncate">{file.error}</p>}
+                  {file.progress?.message && file.status === 'analyzing' && (
+                    <p className="text-xs text-stone mt-1 truncate">{file.progress.message}</p>
+                  )}
+                </div>
+                <span
+                  className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.09em] ${
+                    statusStyles[file.status]
+                  }`}
+                >
+                  {statusLabels[file.status]}
+                </span>
+                <button
+                  onClick={() => removePointsBatchFile(file.id)}
+                  className="text-stone hover:text-rose-700 text-sm leading-none"
+                  title="Remove file"
+                  aria-label="Remove file"
+                >
+                  X
+                </button>
+              </div>
+              {file.status === 'analyzing' && typeof file.progress?.percent === 'number' && (
+                <div className="h-1.5 rounded-full bg-line mt-2 overflow-hidden">
+                  <div className="h-full bg-brand transition-all duration-300" style={{ width: `${file.progress.percent}%` }} />
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
 
         <div className="mt-5 pt-4 border-t border-line flex gap-3">
           <button
@@ -752,11 +900,11 @@ const App: React.FC = () => {
             Clear
           </button>
           <button
-            onClick={handleAnalyzePresentation}
-            disabled={!pointsFile || isPointsLoading}
+            onClick={handleAnalyzePointsBatch}
+            disabled={pointsReadyCount === 0 || isPointsLoading}
             className="flex-1 rounded-xl bg-brand text-white text-sm font-semibold py-2.5 px-4 disabled:opacity-50 hover:bg-brand/90 transition"
           >
-            {isPointsLoading ? 'Analyzing...' : 'Find Top 3 Slides'}
+            {isPointsLoading ? 'Processing Batch...' : `Analyze ${pointsReadyCount} File${pointsReadyCount === 1 ? '' : 's'}`}
           </button>
         </div>
       </div>
@@ -765,44 +913,72 @@ const App: React.FC = () => {
 
   const renderPointsResults = () => (
     <section className="lg:col-span-7 space-y-6">
+      {completedPointsResults.length > 0 && (
+        <div className="rounded-2xl border border-line bg-white shadow-panel p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <p className="text-sm text-stone">
+            {completedPointsResults.length} compan{completedPointsResults.length === 1 ? 'y' : 'ies'} ready for Points export.
+          </p>
+          <button
+            onClick={handleCopyAllPoints}
+            className={`inline-flex items-center justify-center rounded-xl border px-4 py-2 text-sm font-semibold transition ${
+              pointsCopyAllStatus === 'copied'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                : 'border-brand bg-brand text-white hover:bg-brand/90'
+            }`}
+          >
+            {pointsCopyAllStatus === 'copied' ? 'Copied All' : 'Copy All'}
+          </button>
+        </div>
+      )}
+
+      {pointsCopyAllStatus === 'error' && pointsCopyAllErrorMessage && (
+        <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{pointsCopyAllErrorMessage}</div>
+      )}
+
       {isPointsLoading && (
         <>
           <AnalysisProgressPanel
-            title="Presentation Analysis Running"
-            subtitle="Parsing slides and ranking the highest-signal pages."
-            progress={pointsState.progress}
+            title="Presentation Batch Analysis Running"
+            subtitle="Decks are processed sequentially and high-signal slides are selected."
+            progress={pointsBatchProgress?.progress}
+            batchStats={{
+              completed: pointsBatchProgress?.completed ?? 0,
+              failed: pointsBatchProgress?.failed ?? 0,
+              total: pointsBatchProgress?.total ?? 0,
+              currentLabel: pointsBatchProgress?.currentLabel,
+            }}
           />
           <SlideSkeleton />
           <SlideSkeleton />
         </>
       )}
 
-      {pointsState.status === 'error' && (
-        <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{pointsState.errorMessage}</div>
-      )}
-
-      {pointsState.status === 'idle' && !isPointsLoading && (
+      {completedPointsResults.length === 0 && !isPointsLoading && (
         <div className="rounded-2xl border border-dashed border-line bg-white/70 p-10 text-center shadow-panel">
           <h3 className="font-serif text-2xl text-ink">Ready to analyze a presentation</h3>
           <p className="text-sm text-stone mt-2">
-            Upload an investor deck and we will surface the 3 slides with the strongest narrative value.
+            Upload one or more investor decks and we will surface the most meaningful long-term insight slides.
           </p>
         </div>
       )}
 
-      {pointsState.status === 'complete' && pointsState.result && (
-        <div className="space-y-5">
-          <header>
-            <h2 className="font-serif text-3xl text-ink">{pointsState.result.companyName}</h2>
-            <p className="text-sm text-stone">{pointsState.result.fiscalPeriod} - Key Insights</p>
-          </header>
-          <div className="space-y-5">
-            {pointsState.result.slides.map((slide, index) => (
-              <PointsCard key={slide.selectedPageNumber} slide={slide} index={index + 1} />
-            ))}
+      {pointsBatchFiles
+        .filter((file) => file.result)
+        .map((file) => (
+          <div key={file.id} className="space-y-5">
+            <header>
+              <h2 className="font-serif text-3xl text-ink">{file.result?.companyName}</h2>
+              <p className="text-sm text-stone">
+                {file.result?.fiscalPeriod} | {file.result?.marketCapCategory} | {file.result?.industry}
+              </p>
+            </header>
+            <div className="space-y-5">
+              {file.result?.slides.map((slide, index) => (
+                <PointsCard key={`${file.id}-${slide.selectedPageNumber}-${index}`} slide={slide} index={index + 1} />
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        ))}
     </section>
   );
 

@@ -13,13 +13,17 @@ interface ApiErrorPayload {
 
 interface PointsAnalyzeApiSlide {
   selectedPageNumber: number;
-  whyThisSlide: string;
-  whatThisSlideReveals: string;
+  context: string;
 }
 
 interface PointsAnalyzeApiResult {
   companyName: string;
   fiscalPeriod: string;
+  nseScrip: string;
+  marketCapCategory: string;
+  industry: string;
+  companyDescription: string;
+  zerodhaStockUrl?: string;
   slides: PointsAnalyzeApiSlide[];
 }
 
@@ -237,9 +241,16 @@ export const analyzePresentation = async (
     throw new Error("AI returned invalid page numbers.");
   }
 
+  const sortedSlides = slidesWithImages.sort((a, b) => a.selectedPageNumber - b.selectedPageNumber);
+
   return {
     companyName: result.companyName,
     fiscalPeriod: result.fiscalPeriod,
-    slides: slidesWithImages,
+    nseScrip: result.nseScrip,
+    marketCapCategory: result.marketCapCategory,
+    industry: result.industry,
+    companyDescription: result.companyDescription,
+    zerodhaStockUrl: result.zerodhaStockUrl,
+    slides: sortedSlides,
   };
 };

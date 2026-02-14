@@ -24,18 +24,10 @@ const PointsCard: React.FC<PointsCardProps> = ({ slide, index }) => {
         />
       </figure>
 
-      <div className="p-5 sm:p-6 space-y-5">
-        <section className="rounded-xl border border-brand/20 bg-brand-soft/40 p-4">
-          <h4 className="text-xs font-semibold uppercase tracking-[0.14em] text-brand mb-2">Why this matters</h4>
-          <p className="text-sm leading-relaxed text-ink">{slide.whyThisSlide}</p>
-        </section>
-
-        <section>
-          <h4 className="text-xs font-semibold uppercase tracking-[0.14em] text-stone mb-2">What this reveals</h4>
-          <div
-            className="prose prose-sm max-w-none text-ink/90 leading-relaxed"
-            dangerouslySetInnerHTML={{ __html: slide.whatThisSlideReveals.replace(/\n/g, '<br />') }}
-          />
+      <div className="p-5 sm:p-6">
+        <section className="rounded-xl border border-brand/20 bg-brand-soft/40 px-4 py-3.5">
+          <h4 className="text-xs font-semibold uppercase tracking-[0.14em] text-brand mb-2">Context</h4>
+          <p className="text-sm leading-relaxed text-ink ml-4 border-l-2 border-brand/40 pl-4">{slide.context}</p>
         </section>
       </div>
     </article>

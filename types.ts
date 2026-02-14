@@ -65,15 +65,29 @@ export interface BatchFile {
 
 export interface SelectedSlide {
   selectedPageNumber: number;
-  whyThisSlide: string;
-  whatThisSlideReveals: string;
+  context: string;
   pageAsImage: string; // Base64 encoded image
 }
 
 export interface PointsAndFiguresResult {
   companyName: string;
   fiscalPeriod: string;
+  nseScrip: string;
+  marketCapCategory: string;
+  industry: string;
+  companyDescription: string;
+  zerodhaStockUrl?: string;
   slides: SelectedSlide[];
+}
+
+export interface PointsBatchFile {
+  id: string;
+  name: string;
+  file: File;
+  status: 'pending' | 'parsing' | 'ready' | 'analyzing' | 'complete' | 'error';
+  result?: PointsAndFiguresResult;
+  error?: string;
+  progress?: ProgressEvent;
 }
 
 export interface PointsAnalysisState {

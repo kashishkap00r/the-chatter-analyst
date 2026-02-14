@@ -20,6 +20,55 @@ const json = (payload: unknown, status = 200): Response =>
 const error = (status: number, code: string, message: string): Response =>
   json({ error: { code, message } }, status);
 
+const hasNonEmptyString = (value: unknown): value is string =>
+  typeof value === "string" && value.trim().length > 0;
+
+const validatePointsResult = (result: any, maxPageCount: number): string | null => {
+  if (!result || typeof result !== "object") {
+    return "Gemini response is not a JSON object.";
+  }
+
+  const requiredRootFields = [
+    "companyName",
+    "fiscalPeriod",
+    "nseScrip",
+    "marketCapCategory",
+    "industry",
+    "companyDescription",
+  ];
+  for (const field of requiredRootFields) {
+    if (!hasNonEmptyString(result[field])) {
+      return `Missing or invalid field '${field}'.`;
+    }
+  }
+
+  if (!Array.isArray(result.slides) || result.slides.length === 0) {
+    return "Field 'slides' must contain at least 1 item.";
+  }
+
+  for (let i = 0; i < result.slides.length; i++) {
+    const slide = result.slides[i];
+    const slideIndex = i + 1;
+    if (!slide || typeof slide !== "object") {
+      return `Slide #${slideIndex} is invalid.`;
+    }
+
+    if (!Number.isInteger(slide.selectedPageNumber)) {
+      return `Slide #${slideIndex} has an invalid 'selectedPageNumber'.`;
+    }
+
+    if (slide.selectedPageNumber < 1 || slide.selectedPageNumber > maxPageCount) {
+      return `Slide #${slideIndex} page number ${slide.selectedPageNumber} is out of range.`;
+    }
+
+    if (!hasNonEmptyString(slide.context)) {
+      return `Slide #${slideIndex} is missing 'context'.`;
+    }
+  }
+
+  return null;
+};
+
 const extractBase64 = (dataUri: string): string => {
   const commaIndex = dataUri.indexOf(",");
   if (commaIndex >= 0) {
@@ -85,8 +134,9 @@ export async function onRequestPost(context: any): Promise<Response> {
       responseSchema: POINTS_RESPONSE_SCHEMA,
     });
 
-    if (!Array.isArray(result?.slides) || result.slides.length === 0) {
-      return error(502, "UPSTREAM_ERROR", "AI did not return any selected slides.");
+    const validationError = validatePointsResult(result, pageImages.length);
+    if (validationError) {
+      return error(502, "UPSTREAM_ERROR", `Presentation analysis failed validation: ${validationError}`);
     }
 
     return json(result);

@@ -69,20 +69,33 @@ export const POINTS_RESPONSE_SCHEMA = {
   properties: {
     companyName: { type: "STRING" },
     fiscalPeriod: { type: "STRING" },
+    nseScrip: { type: "STRING" },
+    marketCapCategory: { type: "STRING" },
+    industry: { type: "STRING" },
+    companyDescription: { type: "STRING" },
+    zerodhaStockUrl: { type: "STRING" },
     slides: {
       type: "ARRAY",
+      minItems: 1,
       items: {
         type: "OBJECT",
         properties: {
           selectedPageNumber: { type: "INTEGER" },
-          whyThisSlide: { type: "STRING" },
-          whatThisSlideReveals: { type: "STRING" },
+          context: { type: "STRING" },
         },
-        required: ["selectedPageNumber", "whyThisSlide", "whatThisSlideReveals"],
+        required: ["selectedPageNumber", "context"],
       },
     },
   },
-  required: ["companyName", "fiscalPeriod", "slides"],
+  required: [
+    "companyName",
+    "fiscalPeriod",
+    "nseScrip",
+    "marketCapCategory",
+    "industry",
+    "companyDescription",
+    "slides",
+  ],
 };
 
 export const CHATTER_PROMPT = `
@@ -126,20 +139,33 @@ SELF-CHECK BEFORE FINALIZING
 `.trim();
 
 export const POINTS_PROMPT = `
-You are an analyst for Points & Figures, a Zerodha newsletter.
-Look at an investor presentation (provided as slide images) and pick the top 3 most insightful slides.
+ROLE & AUDIENCE
+You are an analyst for "Points & Figures | India Edition," a newsletter for portfolio managers.
 
-Selection rules:
-1. Choose slides with material signal (business, sector, profitability, risks, long-term opportunity).
-2. Prefer slides with measurable change (YoY, CAGR, segment/geography contrast).
-3. Prioritize archetypes: market structure, unit economics, geo/customer mix, product mix, TAM + growth.
-4. Ignore values/mission-only slides, decorative covers, awards, factory photos without data, and org charts.
-5. Rank top 3 by materiality, signal-to-noise, and narrative clarity.
+CORE MISSION
+1. Identify companyName and fiscalPeriod from the deck.
+2. Identify NSE trading scrip used in Zerodha URLs (for example: RELIANCE, SBIN, HDFCBANK).
+3. Determine marketCapCategory and industry as shown on Zerodha stock pages.
+4. Write a concise factual 2-sentence companyDescription.
+5. Select the most insightful presentation slides with longer-term implications for the business/industry.
 
-Output:
-- Return one JSON object with companyName, fiscalPeriod, and slides.
-- slides must contain exactly 3 objects.
-- Each slide object includes selectedPageNumber (1-indexed), whyThisSlide, whatThisSlideReveals.
+SLIDE SELECTION RULES
+- Prioritize strategic signal over quarterly noise.
+- Favor slides that reveal industry structure, durable demand/supply shifts, capital allocation, M&A, product mix change, moat/competition, unit economics, regulatory change, or management strategy pivot.
+- Avoid generic update slides that only restate routine quarterly revenue/profit movement without structural insight.
+- Ignore cover pages, ESG slogans, awards, org charts, photo-heavy pages with little analytical value.
+- Target at least 3 slides when enough quality material exists; return fewer only if the deck has limited high-signal content.
+- No upper cap on slide count.
+
+SLIDE OUTPUT FORMAT
+- For each selected slide, return:
+  a) selectedPageNumber (1-indexed)
+  b) context: one concise paragraph explaining why the slide matters to an investor.
+
+OUTPUT RULES
+- Return one JSON object with companyName, fiscalPeriod, nseScrip, marketCapCategory, industry, companyDescription, and slides.
+- nseScrip must be uppercase and contain only A-Z and 0-9.
+- Use market cap labels like Large Cap, Mid Cap, Small Cap, or Micro Cap.
 - Return valid JSON only.
 `.trim();
 
