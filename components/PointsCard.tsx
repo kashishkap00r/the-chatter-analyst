@@ -8,43 +8,37 @@ interface PointsCardProps {
 
 const PointsCard: React.FC<PointsCardProps> = ({ slide, index }) => {
   return (
-    <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm space-y-6">
-      <header className="border-b border-gray-200 pb-4">
-        <h3 className="text-xl font-serif font-bold text-gray-900">
-          Insight #{index}
-        </h3>
-        <p className="text-sm text-gray-500">From Slide {slide.selectedPageNumber}</p>
+    <article className="rounded-2xl border border-line bg-white shadow-panel overflow-hidden">
+      <header className="px-5 sm:px-6 py-4 border-b border-line bg-canvas/80">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="font-serif text-xl text-ink">Insight {index}</h3>
+          <p className="text-xs uppercase tracking-[0.12em] text-stone">Slide {slide.selectedPageNumber}</p>
+        </div>
       </header>
 
-      <figure className="border-2 border-gray-200 bg-gray-50 rounded-lg overflow-hidden">
-        <img 
-          src={slide.pageAsImage} 
-          alt={`Slide ${slide.selectedPageNumber}`} 
-          className="w-full h-auto"
+      <figure className="p-4 sm:p-6 border-b border-line bg-canvas/60">
+        <img
+          src={slide.pageAsImage}
+          alt={`Slide ${slide.selectedPageNumber}`}
+          className="w-full h-auto rounded-xl border border-line"
         />
       </figure>
 
-      <div className="space-y-6">
-        <section className="bg-indigo-50 rounded-lg p-4 border border-indigo-100">
-          <h4 className="text-sm font-bold text-indigo-800 uppercase tracking-wider mb-2">
-            Why This Slide Matters
-          </h4>
-          <p className="text-base text-indigo-900 leading-relaxed">
-            {slide.whyThisSlide}
-          </p>
+      <div className="p-5 sm:p-6 space-y-5">
+        <section className="rounded-xl border border-brand/20 bg-brand-soft/40 p-4">
+          <h4 className="text-xs font-semibold uppercase tracking-[0.14em] text-brand mb-2">Why this matters</h4>
+          <p className="text-sm leading-relaxed text-ink">{slide.whyThisSlide}</p>
         </section>
 
         <section>
-          <h4 className="text-sm font-bold text-gray-600 uppercase tracking-wider mb-2">
-            What This Slide Reveals
-          </h4>
-          <div 
-            className="prose prose-base max-w-none text-gray-700 leading-relaxed" 
-            dangerouslySetInnerHTML={{ __html: slide.whatThisSlideReveals.replace(/\n/g, '<br />') }} 
+          <h4 className="text-xs font-semibold uppercase tracking-[0.14em] text-stone mb-2">What this reveals</h4>
+          <div
+            className="prose prose-sm max-w-none text-ink/90 leading-relaxed"
+            dangerouslySetInnerHTML={{ __html: slide.whatThisSlideReveals.replace(/\n/g, '<br />') }}
           />
         </section>
       </div>
-    </div>
+    </article>
   );
 };
 

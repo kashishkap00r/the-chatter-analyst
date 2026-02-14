@@ -1,4 +1,13 @@
 export type AppMode = 'chatter' | 'points';
+export type AnalysisStage = 'idle' | 'preparing' | 'uploading' | 'analyzing' | 'finalizing' | 'complete' | 'error';
+
+export interface ProgressEvent {
+  stage: AnalysisStage;
+  message: string;
+  current?: number;
+  total?: number;
+  percent?: number;
+}
 
 // --- "The Chatter" Types ---
 
@@ -38,6 +47,7 @@ export interface ChatterAnalysisState {
   status: 'idle' | 'analyzing' | 'complete' | 'error';
   result?: ChatterAnalysisResult;
   errorMessage?: string;
+  progress?: ProgressEvent;
 }
 
 export interface BatchFile {
@@ -47,6 +57,7 @@ export interface BatchFile {
   status: 'pending' | 'parsing' | 'ready' | 'analyzing' | 'complete' | 'error';
   result?: ChatterAnalysisResult;
   error?: string;
+  progress?: ProgressEvent;
 }
 
 
@@ -70,6 +81,7 @@ export interface PointsAnalysisState {
     result?: PointsAndFiguresResult;
     errorMessage?: string;
     progressMessage?: string;
+    progress?: ProgressEvent;
 }
 
 

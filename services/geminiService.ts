@@ -1,4 +1,4 @@
-import { ChatterAnalysisResult, ModelType, PointsAndFiguresResult, SelectedSlide } from "../types";
+import { ChatterAnalysisResult, ModelType, PointsAndFiguresResult, ProgressEvent, SelectedSlide } from "../types";
 
 const CHATTER_ANALYZE_ENDPOINT = "/api/chatter/analyze";
 const POINTS_ANALYZE_ENDPOINT = "/api/points/analyze";
@@ -65,6 +65,13 @@ const postJson = async <T>(url: string, body: unknown): Promise<T> => {
     throw new Error("Server returned invalid JSON.");
   }
 };
+
+const transcriptProgressDefaults: ProgressEvent[] = [
+  { stage: "preparing", message: "Normalizing transcript and validating structure...", percent: 8 },
+  { stage: "uploading", message: "Sending transcript to Gemini...", percent: 22 },
+  { stage: "analyzing", message: "Extracting strategic quotes and implications...", percent: 62 },
+  { stage: "finalizing", message: "Structuring insights for output...", percent: 88 },
+];
 
 // --- PDF Processing ---
 
@@ -161,15 +168,39 @@ export const convertPdfToImages = async (file: File, onProgress: (msg: string) =
 export const analyzeTranscript = async (
   transcript: string,
   modelId: ModelType = ModelType.FLASH,
+  onProgress?: (event: ProgressEvent) => void,
 ): Promise<ChatterAnalysisResult> => {
   if (!transcript.trim()) {
     throw new Error("Transcript is empty.");
   }
 
-  return postJson<ChatterAnalysisResult>(CHATTER_ANALYZE_ENDPOINT, {
-    transcript,
-    model: modelId,
-  });
+  let progressInterval: ReturnType<typeof setInterval> | undefined;
+  let index = 0;
+
+  if (onProgress) {
+    onProgress(transcriptProgressDefaults[0]);
+    progressInterval = setInterval(() => {
+      index = Math.min(index + 1, transcriptProgressDefaults.length - 1);
+      onProgress(transcriptProgressDefaults[index]);
+    }, 1500);
+  }
+
+  try {
+    const result = await postJson<ChatterAnalysisResult>(CHATTER_ANALYZE_ENDPOINT, {
+      transcript,
+      model: modelId,
+    });
+
+    onProgress?.({ stage: "complete", message: "Insights ready.", percent: 100 });
+    return result;
+  } catch (error) {
+    onProgress?.({ stage: "error", message: "Analysis failed. Please retry.", percent: 100 });
+    throw error;
+  } finally {
+    if (progressInterval) {
+      clearInterval(progressInterval);
+    }
+  }
 };
 
 // --- "Points & Figures" Analysis ---
