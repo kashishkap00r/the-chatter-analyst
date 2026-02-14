@@ -70,6 +70,11 @@ const SlideSkeleton: React.FC = () => (
 const POINTS_CHUNK_SIZE = 12;
 const POINTS_MAX_IMAGE_PAYLOAD_CHARS = 20 * 1024 * 1024;
 const POINTS_CHUNK_MAX_RETRIES = 2;
+const POINTS_RETRY_RENDER_PROFILES = [
+  { scale: 1.15, jpegQuality: 0.75 },
+  { scale: 1.0, jpegQuality: 0.65 },
+  { scale: 0.85, jpegQuality: 0.55 },
+];
 
 const mapPointsProgress = (message: string): ProgressEvent => {
   const convertedMatch = message.match(/Converted page (\d+) of (\d+)/i);
@@ -522,9 +527,13 @@ const App: React.FC = () => {
 
           for (let attempt = 0; attempt <= POINTS_CHUNK_MAX_RETRIES; attempt++) {
             try {
+              const renderProfile =
+                POINTS_RETRY_RENDER_PROFILES[Math.min(attempt, POINTS_RETRY_RENDER_PROFILES.length - 1)];
               const pageImages = await convertPdfToImages(nextFiles[fileIndex].file, onChunkProgress, {
                 startPage: range.startPage,
                 endPage: range.endPage,
+                scale: renderProfile.scale,
+                jpegQuality: renderProfile.jpegQuality,
               });
 
               const payloadChars = pageImages.reduce((sum, image) => sum + image.length, 0);
@@ -543,6 +552,7 @@ const App: React.FC = () => {
                   { startPage: range.startPage, endPage: midPoint },
                   { startPage: midPoint + 1, endPage: range.endPage },
                 );
+                onChunkProgress(`${chunkLabel}: payload too large, splitting to smaller ranges...`);
                 chunkIndex -= 1;
                 chunkSucceeded = true;
                 break;
@@ -565,6 +575,21 @@ const App: React.FC = () => {
                 onChunkProgress(`${chunkLabel}: transient error, retrying (${retryCount}/${POINTS_CHUNK_MAX_RETRIES})...`);
                 await wait(700 * retryCount);
                 continue;
+              }
+
+              const rangeLength = range.endPage - range.startPage + 1;
+              if (isRetriable && rangeLength > 1) {
+                const midPoint = Math.floor((range.startPage + range.endPage) / 2);
+                ranges.splice(
+                  chunkIndex,
+                  1,
+                  { startPage: range.startPage, endPage: midPoint },
+                  { startPage: midPoint + 1, endPage: range.endPage },
+                );
+                onChunkProgress(`${chunkLabel}: splitting range due repeated upstream failures...`);
+                chunkIndex -= 1;
+                chunkSucceeded = true;
+                break;
               }
 
               failedChunks.push(
@@ -1042,7 +1067,7 @@ const App: React.FC = () => {
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-ink truncate">{file.result?.companyName || file.name}</p>
                   {file.error && (
-                    <p className={`text-xs mt-1 truncate ${file.status === 'complete' ? 'text-amber-700' : 'text-rose-700'}`}>
+                    <p className={`text-xs mt-1 whitespace-normal break-words ${file.status === 'complete' ? 'text-amber-700' : 'text-rose-700'}`}>
                       {file.status === 'complete' ? `Warning: ${file.error}` : file.error}
                     </p>
                   )}

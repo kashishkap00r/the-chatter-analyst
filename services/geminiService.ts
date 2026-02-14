@@ -32,6 +32,8 @@ interface PointsAnalyzeApiResult {
 interface PdfImageConversionOptions {
   startPage?: number;
   endPage?: number;
+  scale?: number;
+  jpegQuality?: number;
 }
 
 const parseApiErrorMessage = async (response: Response): Promise<string> => {
@@ -193,7 +195,7 @@ export const convertPdfToImages = async (
   await Promise.all(
     pages.map(async (page, index) => {
       const pageWithinRange = index + 1;
-      const viewport = page.getViewport({ scale: 1.5 });
+      const viewport = page.getViewport({ scale: options?.scale ?? 1.15 });
       const canvas = document.createElement("canvas");
       const context = canvas.getContext("2d");
       canvas.height = viewport.height;
@@ -201,7 +203,7 @@ export const convertPdfToImages = async (
 
       if (context) {
         await page.render({ canvasContext: context, viewport }).promise;
-        imagePromises[index] = Promise.resolve(canvas.toDataURL("image/jpeg", 0.8));
+        imagePromises[index] = Promise.resolve(canvas.toDataURL("image/jpeg", options?.jpegQuality ?? 0.75));
       }
       onProgress(`Converted page ${pageWithinRange} of ${pageCountInRange}`);
     }),
