@@ -236,13 +236,17 @@ export const analyzePresentation = async (
   pageImages: string[],
   onProgress: (msg: string) => void,
   pageOffset = 0,
+  modelId: ModelType = ModelType.FLASH,
 ): Promise<PointsAndFiguresResult> => {
   if (!Array.isArray(pageImages) || pageImages.length === 0) {
     throw new Error("No presentation pages found to analyze.");
   }
 
   onProgress("Analyzing slides with AI...");
-  const result = await postJson<PointsAnalyzeApiResult>(POINTS_ANALYZE_ENDPOINT, { pageImages });
+  const result = await postJson<PointsAnalyzeApiResult>(POINTS_ANALYZE_ENDPOINT, {
+    pageImages,
+    model: modelId,
+  });
 
   if (!result.slides || result.slides.length === 0) {
     throw new Error("AI did not return any selected slides.");

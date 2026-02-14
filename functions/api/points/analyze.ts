@@ -7,7 +7,8 @@ interface Env {
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
 const MAX_PAGES = 60;
 const MAX_TOTAL_IMAGE_CHARS = 20 * 1024 * 1024;
-const MODEL = "gemini-2.5-flash";
+const DEFAULT_MODEL = "gemini-2.5-flash";
+const ALLOWED_MODELS = new Set(["gemini-2.5-flash", "gemini-3-pro-preview"]);
 
 const json = (payload: unknown, status = 200): Response =>
   new Response(JSON.stringify(payload), {
@@ -113,6 +114,11 @@ export async function onRequestPost(context: any): Promise<Response> {
     return error(400, "BAD_REQUEST", "Field 'pageImages' is required.");
   }
 
+  const model = typeof body?.model === "string" ? body.model : DEFAULT_MODEL;
+  if (!ALLOWED_MODELS.has(model)) {
+    return error(400, "BAD_REQUEST", "Field 'model' is invalid.");
+  }
+
   if (pageImages.length > MAX_PAGES) {
     return error(400, "BAD_REQUEST", `A maximum of ${MAX_PAGES} pages is supported.`);
   }
@@ -136,7 +142,7 @@ export async function onRequestPost(context: any): Promise<Response> {
   try {
     const result = await callGeminiJson({
       apiKey: env.GEMINI_API_KEY,
-      model: MODEL,
+      model,
       contents: [
         {
           parts: [{ text: POINTS_PROMPT }, ...imageParts],

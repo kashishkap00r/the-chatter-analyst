@@ -151,6 +151,7 @@ const App: React.FC = () => {
   const [inputMode, setInputMode] = useState<'text' | 'file'>('file');
   const [textInput, setTextInput] = useState('');
   const [model, setModel] = useState<ModelType>(ModelType.FLASH);
+  const [pointsModel, setPointsModel] = useState<ModelType>(ModelType.FLASH);
 
   const [batchFiles, setBatchFiles] = useState<BatchFile[]>([]);
   const [isAnalyzingBatch, setIsAnalyzingBatch] = useState(false);
@@ -186,7 +187,7 @@ const App: React.FC = () => {
 
   const getCompletedPointsResults = useCallback((): PointsAndFiguresResult[] => {
     return pointsBatchFiles.filter((file) => file.result).map((file) => file.result!) as PointsAndFiguresResult[];
-  }, [pointsBatchFiles]);
+  }, [pointsBatchFiles, pointsModel]);
 
   const handleAnalyzeText = useCallback(async () => {
     if (!textInput.trim()) return;
@@ -510,6 +511,7 @@ const App: React.FC = () => {
             pageImages,
             (message) => onChunkProgress(message),
             range.startPage - 1,
+            pointsModel,
           );
           chunkResults.push(chunkResult);
         }
@@ -1091,19 +1093,24 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              {appMode === 'chatter' && (
-                <label className="text-sm font-semibold text-stone">
-                  Model
-                  <select
-                    value={model}
-                    onChange={(event) => setModel(event.target.value as ModelType)}
-                    className="ml-2 rounded-lg border border-line bg-white px-3 py-1.5 text-sm text-ink"
-                  >
-                    <option value={ModelType.FLASH}>Gemini 2.5 Flash (Fast)</option>
-                    <option value={ModelType.PRO}>Gemini 3 Pro (Deep)</option>
-                  </select>
-                </label>
-              )}
+              <label className="text-sm font-semibold text-stone">
+                Model
+                <select
+                  value={appMode === 'chatter' ? model : pointsModel}
+                  onChange={(event) => {
+                    const selectedModel = event.target.value as ModelType;
+                    if (appMode === 'chatter') {
+                      setModel(selectedModel);
+                    } else {
+                      setPointsModel(selectedModel);
+                    }
+                  }}
+                  className="ml-2 rounded-lg border border-line bg-white px-3 py-1.5 text-sm text-ink"
+                >
+                  <option value={ModelType.FLASH}>Gemini 2.5 Flash (Fast)</option>
+                  <option value={ModelType.PRO}>Gemini 3 Pro (Deep)</option>
+                </select>
+              </label>
             </div>
 
             <div className="inline-flex rounded-xl border border-line bg-white p-1 max-w-xl w-full">
