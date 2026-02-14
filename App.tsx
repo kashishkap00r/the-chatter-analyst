@@ -154,11 +154,28 @@ const mergePointsChunkResults = (results: PointsAndFiguresResult[]): PointsAndFi
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const extractHttpStatus = (message: string): number | null => {
+  const match = message.match(/status\s+(\d{3})/i);
+  if (!match) return null;
+  const parsed = Number(match[1]);
+  return Number.isInteger(parsed) ? parsed : null;
+};
+
 const isRetriableChunkError = (message: string): boolean => {
   const normalized = message.toLowerCase();
+  const httpStatus = extractHttpStatus(message);
+  const isRetriableStatus = httpStatus !== null && (httpStatus === 429 || (httpStatus >= 500 && httpStatus <= 599));
+
   return (
+    isRetriableStatus ||
     normalized.includes("429") ||
+    normalized.includes("502") ||
     normalized.includes("503") ||
+    normalized.includes("504") ||
+    normalized.includes("bad gateway") ||
+    normalized.includes("gateway timeout") ||
+    normalized.includes("failed to fetch") ||
+    normalized.includes("networkerror") ||
     normalized.includes("timeout") ||
     normalized.includes("overload") ||
     normalized.includes("unable to process input image") ||
