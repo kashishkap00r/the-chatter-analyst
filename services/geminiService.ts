@@ -36,8 +36,18 @@ interface PdfImageConversionOptions {
   jpegQuality?: number;
 }
 
+const parseRetryAfterSeconds = (response: Response): number | null => {
+  const header = response.headers.get("retry-after");
+  if (!header) return null;
+  const parsed = Number(header);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.ceil(parsed);
+};
+
 const parseApiErrorMessage = async (response: Response): Promise<string> => {
   let fallbackMessage = `Request failed with status ${response.status}.`;
+  const retryAfterSeconds = parseRetryAfterSeconds(response);
+  const retrySuffix = retryAfterSeconds ? ` Retry in about ${retryAfterSeconds}s.` : "";
   const clonedResponse = response.clone();
 
   try {
@@ -50,10 +60,10 @@ const parseApiErrorMessage = async (response: Response): Promise<string> => {
           : payload?.error?.details
             ? ` ${JSON.stringify(payload.error.details)}`
             : "";
-      return `${payload.error.message}${reason}${details}`.trim();
+      return `${payload.error.message}${reason}${details}${retrySuffix}`.trim();
     }
     if (payload?.message) {
-      return payload.message;
+      return `${payload.message}${retrySuffix}`.trim();
     }
   } catch {
     // Ignore invalid JSON and try text fallback.
@@ -62,8 +72,14 @@ const parseApiErrorMessage = async (response: Response): Promise<string> => {
   try {
     const rawText = (await clonedResponse.text()).trim();
     if (rawText) {
+      if (/<!doctype html|<html[\s>]/i.test(rawText)) {
+        if (response.status >= 500) {
+          return `Temporary gateway error (status ${response.status}). Please retry.${retrySuffix}`;
+        }
+        return `${fallbackMessage}${retrySuffix}`.trim();
+      }
       const snippet = rawText.length > 320 ? `${rawText.slice(0, 320)}...` : rawText;
-      return `${fallbackMessage} ${snippet}`;
+      return `${fallbackMessage} ${snippet}${retrySuffix}`.trim();
     }
   } catch {
     // Ignore text read failures and fall back to status text.

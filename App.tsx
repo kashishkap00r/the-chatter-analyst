@@ -70,6 +70,10 @@ const SlideSkeleton: React.FC = () => (
 const POINTS_CHUNK_SIZE = 12;
 const POINTS_MAX_IMAGE_PAYLOAD_CHARS = 20 * 1024 * 1024;
 const POINTS_CHUNK_MAX_RETRIES = 2;
+const CHATTER_MAX_RETRIES = 2;
+const CHATTER_RETRY_BASE_DELAY_MS = 1800;
+const POINTS_RETRY_BASE_DELAY_MS = 1200;
+const MAX_RETRY_DELAY_MS = 90 * 1000;
 const POINTS_RETRY_RENDER_PROFILES = [
   { scale: 1.15, jpegQuality: 0.75 },
   { scale: 1.0, jpegQuality: 0.65 },
@@ -161,6 +165,34 @@ const extractHttpStatus = (message: string): number | null => {
   return Number.isInteger(parsed) ? parsed : null;
 };
 
+const extractRetryAfterMs = (message: string): number | null => {
+  const match = message.match(/retry in\s+([\d.]+)s/i);
+  if (!match) return null;
+  const parsed = Number(match[1]);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.min(MAX_RETRY_DELAY_MS, Math.ceil(parsed * 1000) + 1200);
+};
+
+const isRateLimitError = (message: string): boolean => {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('429') ||
+    normalized.includes('quota') ||
+    normalized.includes('rate limit') ||
+    normalized.includes('too many requests') ||
+    normalized.includes('resource exhausted') ||
+    normalized.includes('generate_content_free_tier_requests')
+  );
+};
+
+const getRetryDelayMs = (message: string, retryCount: number, baseDelayMs: number): number => {
+  const retryAfterMs = extractRetryAfterMs(message);
+  if (retryAfterMs !== null) {
+    return retryAfterMs;
+  }
+  return Math.min(MAX_RETRY_DELAY_MS, baseDelayMs * retryCount);
+};
+
 const isRetriableChunkError = (message: string): boolean => {
   const normalized = message.toLowerCase();
   const httpStatus = extractHttpStatus(message);
@@ -168,6 +200,7 @@ const isRetriableChunkError = (message: string): boolean => {
 
   return (
     isRetriableStatus ||
+    isRateLimitError(message) ||
     normalized.includes("429") ||
     normalized.includes("502") ||
     normalized.includes("503") ||
@@ -233,6 +266,39 @@ const App: React.FC = () => {
     return pointsBatchFiles.filter((file) => file.result).map((file) => file.result!) as PointsAndFiguresResult[];
   }, [pointsBatchFiles]);
 
+  const runTranscriptWithRetry = useCallback(
+    async (
+      transcript: string,
+      modelId: ModelType,
+      onProgress: (progress: ProgressEvent) => void,
+      onRetryNotice: (message: string) => void,
+    ): Promise<ChatterAnalysisResult> => {
+      let lastError: any = null;
+      for (let attempt = 0; attempt <= CHATTER_MAX_RETRIES; attempt++) {
+        try {
+          return await analyzeTranscript(transcript, modelId, onProgress);
+        } catch (error: any) {
+          lastError = error;
+          const errorMessage = String(error?.message || 'Analysis failed.');
+          const isRetriable = isRetriableChunkError(errorMessage);
+          if (attempt < CHATTER_MAX_RETRIES && isRetriable) {
+            const retryCount = attempt + 1;
+            const retryDelayMs = getRetryDelayMs(errorMessage, retryCount, CHATTER_RETRY_BASE_DELAY_MS);
+            const retrySeconds = Math.max(1, Math.ceil(retryDelayMs / 1000));
+            const retryReason = isRateLimitError(errorMessage) ? 'Rate limit reached' : 'Temporary upstream issue';
+            onRetryNotice(`${retryReason}. Retrying in ${retrySeconds}s (${retryCount}/${CHATTER_MAX_RETRIES})...`);
+            await wait(retryDelayMs);
+            continue;
+          }
+          throw error;
+        }
+      }
+
+      throw lastError || new Error('Analysis failed.');
+    },
+    [],
+  );
+
   const handleAnalyzeText = useCallback(async () => {
     if (!textInput.trim()) return;
 
@@ -248,13 +314,28 @@ const App: React.FC = () => {
     });
 
     try {
-      const result = await analyzeTranscript(textInput, model, (progress) => {
-        setChatterSingleState((prev) => ({
-          ...prev,
-          status: 'analyzing',
-          progress,
-        }));
-      });
+      const result = await runTranscriptWithRetry(
+        textInput,
+        model,
+        (progress) => {
+          setChatterSingleState((prev) => ({
+            ...prev,
+            status: 'analyzing',
+            progress,
+          }));
+        },
+        (message) => {
+          setChatterSingleState((prev) => ({
+            ...prev,
+            status: 'analyzing',
+            progress: {
+              stage: 'analyzing',
+              message,
+              percent: Math.min(92, Math.max(68, prev.progress?.percent ?? 82)),
+            },
+          }));
+        },
+      );
 
       setChatterSingleState({
         status: 'complete',
@@ -268,7 +349,7 @@ const App: React.FC = () => {
         progress: { stage: 'error', message: 'Analysis failed.', percent: 100 },
       });
     }
-  }, [model, textInput]);
+  }, [model, runTranscriptWithRetry, textInput]);
 
   const handleAnalyzeBatch = useCallback(async () => {
     const pendingIndexes = batchFiles
@@ -316,29 +397,59 @@ const App: React.FC = () => {
       setBatchFiles([...nextFiles]);
 
       try {
-        const result = await analyzeTranscript(nextFiles[fileIndex].content, model, (progress) => {
-          nextFiles[fileIndex] = {
-            ...nextFiles[fileIndex],
-            status: 'analyzing',
-            progress,
-          };
-          setBatchFiles([...nextFiles]);
+        const result = await runTranscriptWithRetry(
+          nextFiles[fileIndex].content,
+          model,
+          (progress) => {
+            nextFiles[fileIndex] = {
+              ...nextFiles[fileIndex],
+              status: 'analyzing',
+              progress,
+            };
+            setBatchFiles([...nextFiles]);
 
-          const { completed, failed } = getCounts();
-          const inFileRatio = (progress.percent ?? 0) / 100;
-          const overallPercent = Math.round(((queueIndex + inFileRatio) / pendingIndexes.length) * 100);
+            const { completed, failed } = getCounts();
+            const inFileRatio = (progress.percent ?? 0) / 100;
+            const overallPercent = Math.round(((queueIndex + inFileRatio) / pendingIndexes.length) * 100);
 
-          setBatchProgress({
-            total: pendingIndexes.length,
-            completed,
-            failed,
-            currentLabel: nextFiles[fileIndex].name,
-            progress: {
-              ...progress,
-              percent: overallPercent,
-            },
-          });
-        });
+            setBatchProgress({
+              total: pendingIndexes.length,
+              completed,
+              failed,
+              currentLabel: nextFiles[fileIndex].name,
+              progress: {
+                ...progress,
+                percent: overallPercent,
+              },
+            });
+          },
+          (message) => {
+            nextFiles[fileIndex] = {
+              ...nextFiles[fileIndex],
+              status: 'analyzing',
+              progress: {
+                stage: 'analyzing',
+                message,
+                percent: 92,
+              },
+            };
+            setBatchFiles([...nextFiles]);
+
+            const { completed, failed } = getCounts();
+            const overallPercent = Math.round(((queueIndex + 0.92) / pendingIndexes.length) * 100);
+            setBatchProgress({
+              total: pendingIndexes.length,
+              completed,
+              failed,
+              currentLabel: nextFiles[fileIndex].name,
+              progress: {
+                stage: 'analyzing',
+                message,
+                percent: overallPercent,
+              },
+            });
+          },
+        );
 
         nextFiles[fileIndex] = {
           ...nextFiles[fileIndex],
@@ -384,7 +495,7 @@ const App: React.FC = () => {
     }
 
     setIsAnalyzingBatch(false);
-  }, [batchFiles, model]);
+  }, [batchFiles, model, runTranscriptWithRetry]);
 
   const handleChatterFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -587,15 +698,22 @@ const App: React.FC = () => {
             } catch (error: any) {
               const errorMessage = String(error?.message || "Unknown chunk failure");
               const isRetriable = isRetriableChunkError(errorMessage);
+              const isRateLimited = isRateLimitError(errorMessage);
               if (attempt < POINTS_CHUNK_MAX_RETRIES && isRetriable) {
                 const retryCount = attempt + 1;
-                onChunkProgress(`${chunkLabel}: transient error, retrying (${retryCount}/${POINTS_CHUNK_MAX_RETRIES})...`);
-                await wait(700 * retryCount);
+                const retryDelayMs = getRetryDelayMs(errorMessage, retryCount, POINTS_RETRY_BASE_DELAY_MS);
+                const retrySeconds = Math.max(1, Math.ceil(retryDelayMs / 1000));
+                onChunkProgress(
+                  `${chunkLabel}: ${
+                    isRateLimited ? 'rate limit reached' : 'transient error'
+                  }, retrying in ${retrySeconds}s (${retryCount}/${POINTS_CHUNK_MAX_RETRIES})...`,
+                );
+                await wait(retryDelayMs);
                 continue;
               }
 
               const rangeLength = range.endPage - range.startPage + 1;
-              if (isRetriable && rangeLength > 1) {
+              if (isRetriable && rangeLength > 1 && !isRateLimited) {
                 const midPoint = Math.floor((range.startPage + range.endPage) / 2);
                 ranges.splice(
                   chunkIndex,
@@ -781,6 +899,23 @@ const App: React.FC = () => {
     setPointsBatchFiles((prev) => prev.filter((file) => file.id !== id));
   };
 
+  const retryBatchFile = (id: string) => {
+    if (isAnalyzingBatch) return;
+    setBatchFiles((prev) =>
+      prev.map((file) => {
+        if (file.id !== id) return file;
+        if (!file.content.trim()) return file;
+        return {
+          ...file,
+          status: 'ready',
+          error: undefined,
+          result: undefined,
+          progress: undefined,
+        };
+      }),
+    );
+  };
+
   const retryPointsBatchFile = (id: string) => {
     if (isAnalyzingPointsBatch) return;
     setPointsBatchFiles((prev) =>
@@ -883,14 +1018,14 @@ const App: React.FC = () => {
 
               {batchFiles.map((file) => (
                 <div key={file.id} className="rounded-xl border border-line bg-white px-3 py-3">
-                  <div className="flex items-start gap-3">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-ink truncate">{file.result?.companyName || file.name}</p>
-                      {file.error && <p className="text-xs text-rose-700 mt-1 truncate">{file.error}</p>}
-                      {file.progress?.message && file.status === 'analyzing' && (
-                        <p className="text-xs text-stone mt-1 truncate">{file.progress.message}</p>
-                      )}
-                    </div>
+                <div className="flex items-start gap-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-ink truncate">{file.result?.companyName || file.name}</p>
+                    {file.error && <p className="text-xs text-rose-700 mt-1 whitespace-normal break-words">{file.error}</p>}
+                    {file.progress?.message && file.status === 'analyzing' && (
+                      <p className="text-xs text-stone mt-1 truncate">{file.progress.message}</p>
+                    )}
+                  </div>
                     <span
                       className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.09em] ${
                         statusStyles[file.status]
@@ -898,6 +1033,15 @@ const App: React.FC = () => {
                     >
                       {statusLabels[file.status]}
                     </span>
+                    {file.status === 'error' && file.content.trim().length > 0 && (
+                      <button
+                        onClick={() => retryBatchFile(file.id)}
+                        className="text-xs font-semibold text-brand hover:text-ink"
+                        title="Retry file"
+                      >
+                        Retry
+                      </button>
+                    )}
                     <button
                       onClick={() => removeBatchFile(file.id)}
                       className="text-stone hover:text-rose-700 text-sm leading-none"
