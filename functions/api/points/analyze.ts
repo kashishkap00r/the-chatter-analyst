@@ -9,6 +9,7 @@ const MAX_PAGES = 60;
 const MAX_TOTAL_IMAGE_CHARS = 20 * 1024 * 1024;
 const DEFAULT_MODEL = "gemini-2.5-flash";
 const ALLOWED_MODELS = new Set(["gemini-2.5-flash", "gemini-3-pro-preview"]);
+const IS_STRICT_VALIDATION: boolean = false;
 
 const json = (payload: unknown, status = 200): Response =>
   new Response(JSON.stringify(payload), {
@@ -18,13 +19,32 @@ const json = (payload: unknown, status = 200): Response =>
     },
   });
 
-const error = (status: number, code: string, message: string): Response =>
-  json({ error: { code, message } }, status);
+const error = (status: number, code: string, message: string, reasonCode?: string, details?: unknown): Response =>
+  json(
+    {
+      error: {
+        code,
+        message,
+        reasonCode,
+        details,
+      },
+    },
+    status,
+  );
 
 const hasNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value.trim().length > 0;
 
 const disallowedContextStart = /^(in this slide|this slide shows|the slide shows)\b/i;
+
+const sanitizeContext = (value: string): string => {
+  let normalized = value.trim();
+  normalized = normalized.replace(/^(in this slide|this slide shows|the slide shows)\s*[:,-]?\s*/i, "");
+  if (normalized && normalized[0] === normalized[0].toLowerCase()) {
+    normalized = normalized[0].toUpperCase() + normalized.slice(1);
+  }
+  return normalized;
+};
 
 const validatePointsResult = (result: any, maxPageCount: number): string | null => {
   if (!result || typeof result !== "object") {
@@ -68,14 +88,21 @@ const validatePointsResult = (result: any, maxPageCount: number): string | null 
       return `Slide #${slideIndex} is missing 'context'.`;
     }
 
-    const normalizedContext = slide.context.trim();
-    if (disallowedContextStart.test(normalizedContext)) {
-      return `Slide #${slideIndex} context must not start with generic narration.`;
+    const normalizedContext = sanitizeContext(slide.context);
+    if (!normalizedContext) {
+      return `Slide #${slideIndex} has empty context after normalization.`;
     }
 
-    if (normalizedContext.length < 80) {
-      return `Slide #${slideIndex} context is too short for an insight-led explanation.`;
+    if (IS_STRICT_VALIDATION) {
+      if (disallowedContextStart.test(slide.context.trim())) {
+        return `Slide #${slideIndex} context must not start with generic narration.`;
+      }
+      if (normalizedContext.length < 80) {
+        return `Slide #${slideIndex} context is too short for an insight-led explanation.`;
+      }
     }
+
+    slide.context = normalizedContext;
   }
 
   return null;
@@ -94,42 +121,42 @@ export async function onRequestPost(context: any): Promise<Response> {
   const env = context.env as Env;
 
   if (!env?.GEMINI_API_KEY) {
-    return error(500, "INTERNAL", "Server is missing GEMINI_API_KEY.");
+    return error(500, "INTERNAL", "Server is missing GEMINI_API_KEY.", "MISSING_GEMINI_KEY");
   }
 
   const contentLength = Number(request.headers.get("content-length") || "0");
   if (contentLength > MAX_BODY_BYTES) {
-    return error(413, "BAD_REQUEST", "Request body is too large.");
+    return error(413, "BAD_REQUEST", "Request body is too large.", "BODY_TOO_LARGE");
   }
 
   let body: any;
   try {
     body = await request.json();
   } catch {
-    return error(400, "BAD_REQUEST", "Request body must be valid JSON.");
+    return error(400, "BAD_REQUEST", "Request body must be valid JSON.", "INVALID_JSON");
   }
 
   const pageImages = Array.isArray(body?.pageImages) ? body.pageImages : [];
   if (pageImages.length === 0) {
-    return error(400, "BAD_REQUEST", "Field 'pageImages' is required.");
+    return error(400, "BAD_REQUEST", "Field 'pageImages' is required.", "MISSING_PAGE_IMAGES");
   }
 
   const model = typeof body?.model === "string" ? body.model : DEFAULT_MODEL;
   if (!ALLOWED_MODELS.has(model)) {
-    return error(400, "BAD_REQUEST", "Field 'model' is invalid.");
+    return error(400, "BAD_REQUEST", "Field 'model' is invalid.", "INVALID_MODEL");
   }
 
   if (pageImages.length > MAX_PAGES) {
-    return error(400, "BAD_REQUEST", `A maximum of ${MAX_PAGES} pages is supported.`);
+    return error(400, "BAD_REQUEST", `A maximum of ${MAX_PAGES} pages is supported.`, "TOO_MANY_PAGES");
   }
 
   if (!pageImages.every((value) => typeof value === "string" && value.length > 0)) {
-    return error(400, "BAD_REQUEST", "All items in 'pageImages' must be non-empty strings.");
+    return error(400, "BAD_REQUEST", "All items in 'pageImages' must be non-empty strings.", "INVALID_PAGE_IMAGE");
   }
 
   const totalImageChars = pageImages.reduce((sum, item) => sum + item.length, 0);
   if (totalImageChars > MAX_TOTAL_IMAGE_CHARS) {
-    return error(413, "BAD_REQUEST", "Total image payload is too large.");
+    return error(413, "BAD_REQUEST", "Total image payload is too large.", "PAYLOAD_TOO_LARGE");
   }
 
   const imageParts = pageImages.map((dataUri) => ({
@@ -153,7 +180,13 @@ export async function onRequestPost(context: any): Promise<Response> {
 
     const validationError = validatePointsResult(result, pageImages.length);
     if (validationError) {
-      return error(502, "UPSTREAM_ERROR", `Presentation analysis failed validation: ${validationError}`);
+      return error(
+        502,
+        "UPSTREAM_ERROR",
+        "Presentation analysis failed validation.",
+        "VALIDATION_FAILED",
+        validationError,
+      );
     }
 
     return json(result);
@@ -161,13 +194,26 @@ export async function onRequestPost(context: any): Promise<Response> {
     const message = String(err?.message || "Unknown error");
 
     if (message.includes("429")) {
-      return error(429, "RATE_LIMIT", "Gemini rate limit reached. Please retry shortly.");
+      return error(429, "RATE_LIMIT", "Gemini rate limit reached. Please retry shortly.", "UPSTREAM_RATE_LIMIT");
     }
 
     if (message.includes("503") || message.toLowerCase().includes("overload")) {
-      return error(502, "UPSTREAM_ERROR", "Gemini is temporarily overloaded. Please retry.");
+      return error(502, "UPSTREAM_ERROR", "Gemini is temporarily overloaded. Please retry.", "UPSTREAM_OVERLOAD");
     }
 
-    return error(502, "UPSTREAM_ERROR", `Presentation analysis failed: ${message}`);
+    if (message.toLowerCase().includes("unable to process input image")) {
+      return error(
+        502,
+        "UPSTREAM_ERROR",
+        "Gemini could not process one or more slide images for this chunk. Retrying may work.",
+        "UPSTREAM_IMAGE_PROCESSING",
+      );
+    }
+
+    if (message.toLowerCase().includes("timed out") || message.toLowerCase().includes("timeout")) {
+      return error(502, "UPSTREAM_ERROR", "Upstream request timed out. Please retry.", "UPSTREAM_TIMEOUT");
+    }
+
+    return error(502, "UPSTREAM_ERROR", `Presentation analysis failed: ${message}`, "UPSTREAM_FAILURE");
   }
 }

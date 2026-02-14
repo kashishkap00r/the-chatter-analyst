@@ -69,6 +69,7 @@ const SlideSkeleton: React.FC = () => (
 
 const POINTS_CHUNK_SIZE = 12;
 const POINTS_MAX_IMAGE_PAYLOAD_CHARS = 20 * 1024 * 1024;
+const POINTS_CHUNK_MAX_RETRIES = 2;
 
 const mapPointsProgress = (message: string): ProgressEvent => {
   const convertedMatch = message.match(/Converted page (\d+) of (\d+)/i);
@@ -146,6 +147,27 @@ const mergePointsChunkResults = (results: PointsAndFiguresResult[]): PointsAndFi
   };
 };
 
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isRetriableChunkError = (message: string): boolean => {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("429") ||
+    normalized.includes("503") ||
+    normalized.includes("timeout") ||
+    normalized.includes("overload") ||
+    normalized.includes("unable to process input image") ||
+    normalized.includes("upstream")
+  );
+};
+
+const getDynamicChunkSize = (fileSizeBytes: number, pageCount: number): number => {
+  const bytesPerPage = fileSizeBytes / Math.max(1, pageCount);
+  if (bytesPerPage > 550 * 1024) return 6;
+  if (bytesPerPage > 320 * 1024) return 8;
+  return POINTS_CHUNK_SIZE;
+};
+
 const App: React.FC = () => {
   const [appMode, setAppMode] = useState<AppMode>('chatter');
   const [inputMode, setInputMode] = useState<'text' | 'file'>('file');
@@ -187,7 +209,7 @@ const App: React.FC = () => {
 
   const getCompletedPointsResults = useCallback((): PointsAndFiguresResult[] => {
     return pointsBatchFiles.filter((file) => file.result).map((file) => file.result!) as PointsAndFiguresResult[];
-  }, [pointsBatchFiles, pointsModel]);
+  }, [pointsBatchFiles]);
 
   const handleAnalyzeText = useCallback(async () => {
     if (!textInput.trim()) return;
@@ -449,19 +471,22 @@ const App: React.FC = () => {
 
       try {
         const pageCount = await getPdfPageCount(nextFiles[fileIndex].file);
+        const initialChunkSize = getDynamicChunkSize(nextFiles[fileIndex].file.size, pageCount);
         const ranges: Array<{ startPage: number; endPage: number }> = [];
-        for (let startPage = 1; startPage <= pageCount; startPage += POINTS_CHUNK_SIZE) {
+        for (let startPage = 1; startPage <= pageCount; startPage += initialChunkSize) {
           ranges.push({
             startPage,
-            endPage: Math.min(pageCount, startPage + POINTS_CHUNK_SIZE - 1),
+            endPage: Math.min(pageCount, startPage + initialChunkSize - 1),
           });
         }
 
         const chunkResults: PointsAndFiguresResult[] = [];
+        const failedChunks: string[] = [];
 
         for (let chunkIndex = 0; chunkIndex < ranges.length; chunkIndex++) {
           const range = ranges[chunkIndex];
           const chunkLabel = `Chunk ${chunkIndex + 1}/${ranges.length}`;
+          let chunkSucceeded = false;
 
           const onChunkProgress = (rawMessage: string) => {
             const mappedProgress = mapPointsProgress(rawMessage);
@@ -495,44 +520,88 @@ const App: React.FC = () => {
             });
           };
 
-          const pageImages = await convertPdfToImages(nextFiles[fileIndex].file, onChunkProgress, {
-            startPage: range.startPage,
-            endPage: range.endPage,
-          });
+          for (let attempt = 0; attempt <= POINTS_CHUNK_MAX_RETRIES; attempt++) {
+            try {
+              const pageImages = await convertPdfToImages(nextFiles[fileIndex].file, onChunkProgress, {
+                startPage: range.startPage,
+                endPage: range.endPage,
+              });
 
-          const payloadChars = pageImages.reduce((sum, image) => sum + image.length, 0);
-          if (payloadChars > POINTS_MAX_IMAGE_PAYLOAD_CHARS) {
-            throw new Error(
-              `Chunk ${chunkIndex + 1} payload is too large for API limits. Please split this presentation manually.`,
-            );
+              const payloadChars = pageImages.reduce((sum, image) => sum + image.length, 0);
+              if (payloadChars > POINTS_MAX_IMAGE_PAYLOAD_CHARS) {
+                const rangeLength = range.endPage - range.startPage + 1;
+                if (rangeLength <= 1) {
+                  throw new Error(
+                    `${chunkLabel} (pages ${range.startPage}-${range.endPage}) is too large even for a single page.`,
+                  );
+                }
+
+                const midPoint = Math.floor((range.startPage + range.endPage) / 2);
+                ranges.splice(
+                  chunkIndex,
+                  1,
+                  { startPage: range.startPage, endPage: midPoint },
+                  { startPage: midPoint + 1, endPage: range.endPage },
+                );
+                chunkIndex -= 1;
+                chunkSucceeded = true;
+                break;
+              }
+
+              const chunkResult = await analyzePresentation(
+                pageImages,
+                (message) => onChunkProgress(message),
+                range.startPage - 1,
+                pointsModel,
+              );
+              chunkResults.push(chunkResult);
+              chunkSucceeded = true;
+              break;
+            } catch (error: any) {
+              const errorMessage = String(error?.message || "Unknown chunk failure");
+              const isRetriable = isRetriableChunkError(errorMessage);
+              if (attempt < POINTS_CHUNK_MAX_RETRIES && isRetriable) {
+                const retryCount = attempt + 1;
+                onChunkProgress(`${chunkLabel}: transient error, retrying (${retryCount}/${POINTS_CHUNK_MAX_RETRIES})...`);
+                await wait(700 * retryCount);
+                continue;
+              }
+
+              failedChunks.push(
+                `${chunkLabel} pages ${range.startPage}-${range.endPage} failed: ${errorMessage}`,
+              );
+              break;
+            }
           }
 
-          const chunkResult = await analyzePresentation(
-            pageImages,
-            (message) => onChunkProgress(message),
-            range.startPage - 1,
-            pointsModel,
-          );
-          chunkResults.push(chunkResult);
+          if (!chunkSucceeded) {
+            continue;
+          }
         }
 
         if (chunkResults.length === 0) {
-          throw new Error('No analyzable chunks were produced for this presentation.');
+          const details = failedChunks[0] || 'No analyzable chunks were produced for this presentation.';
+          throw new Error(details);
         }
 
         const result = mergePointsChunkResults(chunkResults);
         if (result.slides.length === 0) {
           throw new Error('No valid insight slides were selected across chunks.');
         }
+        const partialWarning =
+          failedChunks.length > 0 ? `Partial analysis: ${failedChunks.length} chunk(s) failed. ${failedChunks[0]}` : undefined;
         const completionMessage =
           result.slides.length < 3
             ? `Analysis complete with ${result.slides.length} high-signal slide${result.slides.length === 1 ? '' : 's'}.`
-            : 'Analysis complete.';
+            : partialWarning
+              ? 'Analysis complete with partial chunk coverage.'
+              : 'Analysis complete.';
 
         nextFiles[fileIndex] = {
           ...nextFiles[fileIndex],
           status: 'complete',
           result,
+          error: partialWarning,
           progress: {
             stage: 'complete',
             message: completionMessage,
@@ -574,7 +643,7 @@ const App: React.FC = () => {
     }
 
     setIsAnalyzingPointsBatch(false);
-  }, [pointsBatchFiles]);
+  }, [pointsBatchFiles, pointsModel]);
 
   const handleCopyAllChatter = useCallback(async () => {
     const completedResults = getCompletedChatterResults();
@@ -668,6 +737,22 @@ const App: React.FC = () => {
 
   const removePointsBatchFile = (id: string) => {
     setPointsBatchFiles((prev) => prev.filter((file) => file.id !== id));
+  };
+
+  const retryPointsBatchFile = (id: string) => {
+    if (isAnalyzingPointsBatch) return;
+    setPointsBatchFiles((prev) =>
+      prev.map((file) => {
+        if (file.id !== id) return file;
+        return {
+          ...file,
+          status: 'ready',
+          error: undefined,
+          result: undefined,
+          progress: undefined,
+        };
+      }),
+    );
   };
 
   const clearChatter = () => {
@@ -956,7 +1041,11 @@ const App: React.FC = () => {
               <div className="flex items-start gap-3">
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-ink truncate">{file.result?.companyName || file.name}</p>
-                  {file.error && <p className="text-xs text-rose-700 mt-1 truncate">{file.error}</p>}
+                  {file.error && (
+                    <p className={`text-xs mt-1 truncate ${file.status === 'complete' ? 'text-amber-700' : 'text-rose-700'}`}>
+                      {file.status === 'complete' ? `Warning: ${file.error}` : file.error}
+                    </p>
+                  )}
                   {file.progress?.message && file.status === 'analyzing' && (
                     <p className="text-xs text-stone mt-1 truncate">{file.progress.message}</p>
                   )}
@@ -968,6 +1057,15 @@ const App: React.FC = () => {
                 >
                   {statusLabels[file.status]}
                 </span>
+                {file.status === 'error' && (
+                  <button
+                    onClick={() => retryPointsBatchFile(file.id)}
+                    className="text-xs font-semibold text-brand hover:text-ink"
+                    title="Retry file"
+                  >
+                    Retry
+                  </button>
+                )}
                 <button
                   onClick={() => removePointsBatchFile(file.id)}
                   className="text-stone hover:text-rose-700 text-sm leading-none"

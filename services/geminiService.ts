@@ -7,6 +7,8 @@ interface ApiErrorPayload {
   error?: {
     code?: string;
     message?: string;
+    reasonCode?: string;
+    details?: unknown;
   };
   message?: string;
 }
@@ -34,17 +36,35 @@ interface PdfImageConversionOptions {
 
 const parseApiErrorMessage = async (response: Response): Promise<string> => {
   let fallbackMessage = `Request failed with status ${response.status}.`;
+  const clonedResponse = response.clone();
 
   try {
     const payload = (await response.json()) as ApiErrorPayload;
     if (payload?.error?.message) {
-      return payload.error.message;
+      const reason = payload?.error?.reasonCode ? ` [${payload.error.reasonCode}]` : "";
+      const details =
+        typeof payload?.error?.details === "string"
+          ? ` ${payload.error.details}`
+          : payload?.error?.details
+            ? ` ${JSON.stringify(payload.error.details)}`
+            : "";
+      return `${payload.error.message}${reason}${details}`.trim();
     }
     if (payload?.message) {
       return payload.message;
     }
   } catch {
-    // Ignore invalid JSON and fall back to status text.
+    // Ignore invalid JSON and try text fallback.
+  }
+
+  try {
+    const rawText = (await clonedResponse.text()).trim();
+    if (rawText) {
+      const snippet = rawText.length > 320 ? `${rawText.slice(0, 320)}...` : rawText;
+      return `${fallbackMessage} ${snippet}`;
+    }
+  } catch {
+    // Ignore text read failures and fall back to status text.
   }
 
   if (response.statusText) {
