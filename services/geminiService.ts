@@ -27,6 +27,11 @@ interface PointsAnalyzeApiResult {
   slides: PointsAnalyzeApiSlide[];
 }
 
+interface PdfImageConversionOptions {
+  startPage?: number;
+  endPage?: number;
+}
+
 const parseApiErrorMessage = async (response: Response): Promise<string> => {
   let fallbackMessage = `Request failed with status ${response.status}.`;
 
@@ -127,29 +132,47 @@ export const parsePdfToText = async (file: File): Promise<string> => {
   return fullText;
 };
 
-export const convertPdfToImages = async (file: File, onProgress: (msg: string) => void): Promise<string[]> => {
+export const getPdfPageCount = async (file: File): Promise<number> => {
+  if (file.size > 25 * 1024 * 1024) {
+    throw new Error("Presentation PDF is too large (max 25MB).");
+  }
+  const pdf = await getPdfDocument(file);
+  return pdf.numPages;
+};
+
+export const convertPdfToImages = async (
+  file: File,
+  onProgress: (msg: string) => void,
+  options?: PdfImageConversionOptions,
+): Promise<string[]> => {
   if (file.size > 25 * 1024 * 1024) {
     throw new Error("Presentation PDF is too large (max 25MB).");
   }
 
   const pdf = await getPdfDocument(file);
-
-  const maxPagesForImages = 60;
-  if (pdf.numPages > maxPagesForImages) {
-    throw new Error(`Presentation is too long (${pdf.numPages} pages, max ${maxPagesForImages}).`);
+  const totalPages = pdf.numPages;
+  const startPage = Math.max(1, options?.startPage ?? 1);
+  const endPage = Math.min(totalPages, options?.endPage ?? totalPages);
+  if (startPage > endPage) {
+    throw new Error("Invalid page range requested for presentation conversion.");
+  }
+  const pageCountInRange = endPage - startPage + 1;
+  const maxPagesPerRequest = 60;
+  if (pageCountInRange > maxPagesPerRequest) {
+    throw new Error(`Too many pages selected (${pageCountInRange}, max ${maxPagesPerRequest}).`);
   }
 
   const imagePromises: Promise<string>[] = [];
-  onProgress(`Converting ${pdf.numPages} pages to images...`);
+  onProgress(`Converting ${pageCountInRange} pages to images (pages ${startPage}-${endPage} of ${totalPages})...`);
 
   const pages = [];
-  for (let i = 1; i <= pdf.numPages; i++) {
+  for (let i = startPage; i <= endPage; i++) {
     pages.push(await pdf.getPage(i));
   }
 
   await Promise.all(
     pages.map(async (page, index) => {
-      const i = index + 1;
+      const pageWithinRange = index + 1;
       const viewport = page.getViewport({ scale: 1.5 });
       const canvas = document.createElement("canvas");
       const context = canvas.getContext("2d");
@@ -160,7 +183,7 @@ export const convertPdfToImages = async (file: File, onProgress: (msg: string) =
         await page.render({ canvasContext: context, viewport }).promise;
         imagePromises[index] = Promise.resolve(canvas.toDataURL("image/jpeg", 0.8));
       }
-      onProgress(`Converted page ${i} of ${pdf.numPages}`);
+      onProgress(`Converted page ${pageWithinRange} of ${pageCountInRange}`);
     }),
   );
 
@@ -212,6 +235,7 @@ export const analyzeTranscript = async (
 export const analyzePresentation = async (
   pageImages: string[],
   onProgress: (msg: string) => void,
+  pageOffset = 0,
 ): Promise<PointsAndFiguresResult> => {
   if (!Array.isArray(pageImages) || pageImages.length === 0) {
     throw new Error("No presentation pages found to analyze.");
@@ -232,6 +256,7 @@ export const analyzePresentation = async (
       }
       return {
         ...slide,
+        selectedPageNumber: slide.selectedPageNumber + pageOffset,
         pageAsImage: pageImages[pageIndex],
       };
     })

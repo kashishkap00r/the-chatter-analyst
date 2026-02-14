@@ -3,6 +3,7 @@ import {
   analyzePresentation,
   analyzeTranscript,
   convertPdfToImages,
+  getPdfPageCount,
   parsePdfToText,
 } from './services/geminiService';
 import {
@@ -66,6 +67,9 @@ const SlideSkeleton: React.FC = () => (
   </div>
 );
 
+const POINTS_CHUNK_SIZE = 12;
+const POINTS_MAX_IMAGE_PAYLOAD_CHARS = 20 * 1024 * 1024;
+
 const mapPointsProgress = (message: string): ProgressEvent => {
   const convertedMatch = message.match(/Converted page (\d+) of (\d+)/i);
   if (convertedMatch) {
@@ -104,6 +108,41 @@ const mapPointsProgress = (message: string): ProgressEvent => {
     stage: 'preparing',
     message,
     percent: 8,
+  };
+};
+
+const firstNonEmpty = (...values: Array<string | undefined>): string => {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+  return '';
+};
+
+const mergePointsChunkResults = (results: PointsAndFiguresResult[]): PointsAndFiguresResult => {
+  const mergedSlides = new Map<number, PointsAndFiguresResult['slides'][number]>();
+
+  for (const result of results) {
+    for (const slide of result.slides) {
+      if (!mergedSlides.has(slide.selectedPageNumber)) {
+        mergedSlides.set(slide.selectedPageNumber, slide);
+      }
+    }
+  }
+
+  const sortedSlides = Array.from(mergedSlides.values()).sort((a, b) => a.selectedPageNumber - b.selectedPageNumber);
+  const base = results[0];
+
+  return {
+    companyName: firstNonEmpty(...results.map((result) => result.companyName)) || base.companyName,
+    fiscalPeriod: firstNonEmpty(...results.map((result) => result.fiscalPeriod)) || base.fiscalPeriod,
+    nseScrip: firstNonEmpty(...results.map((result) => result.nseScrip)) || base.nseScrip,
+    marketCapCategory: firstNonEmpty(...results.map((result) => result.marketCapCategory)) || base.marketCapCategory,
+    industry: firstNonEmpty(...results.map((result) => result.industry)) || base.industry,
+    companyDescription: firstNonEmpty(...results.map((result) => result.companyDescription)) || base.companyDescription,
+    zerodhaStockUrl: firstNonEmpty(...results.map((result) => result.zerodhaStockUrl)),
+    slides: sortedSlides,
   };
 };
 
@@ -407,41 +446,94 @@ const App: React.FC = () => {
       };
       setPointsBatchFiles([...nextFiles]);
 
-      const onProgress = (message: string) => {
-        const mappedProgress = mapPointsProgress(message);
-        nextFiles[fileIndex] = {
-          ...nextFiles[fileIndex],
-          status: 'analyzing',
-          progress: mappedProgress,
-        };
-        setPointsBatchFiles([...nextFiles]);
-
-        const { completed, failed } = getCounts();
-        const inFileRatio = (mappedProgress.percent ?? 0) / 100;
-        const overallPercent = Math.round(((queueIndex + inFileRatio) / pendingIndexes.length) * 100);
-
-        setPointsBatchProgress({
-          total: pendingIndexes.length,
-          completed,
-          failed,
-          currentLabel: nextFiles[fileIndex].name,
-          progress: {
-            ...mappedProgress,
-            percent: overallPercent,
-          },
-        });
-      };
-
       try {
-        const pageImages = await convertPdfToImages(nextFiles[fileIndex].file, onProgress);
-        const result = await analyzePresentation(pageImages, onProgress);
+        const pageCount = await getPdfPageCount(nextFiles[fileIndex].file);
+        const ranges: Array<{ startPage: number; endPage: number }> = [];
+        for (let startPage = 1; startPage <= pageCount; startPage += POINTS_CHUNK_SIZE) {
+          ranges.push({
+            startPage,
+            endPage: Math.min(pageCount, startPage + POINTS_CHUNK_SIZE - 1),
+          });
+        }
+
+        const chunkResults: PointsAndFiguresResult[] = [];
+
+        for (let chunkIndex = 0; chunkIndex < ranges.length; chunkIndex++) {
+          const range = ranges[chunkIndex];
+          const chunkLabel = `Chunk ${chunkIndex + 1}/${ranges.length}`;
+
+          const onChunkProgress = (rawMessage: string) => {
+            const mappedProgress = mapPointsProgress(rawMessage);
+            const inChunkRatio = (mappedProgress.percent ?? 0) / 100;
+            const filePercent = Math.round(((chunkIndex + inChunkRatio) / ranges.length) * 100);
+
+            nextFiles[fileIndex] = {
+              ...nextFiles[fileIndex],
+              status: 'analyzing',
+              progress: {
+                ...mappedProgress,
+                message: `${chunkLabel}: ${mappedProgress.message}`,
+                percent: filePercent,
+              },
+            };
+            setPointsBatchFiles([...nextFiles]);
+
+            const { completed, failed } = getCounts();
+            const overallPercent = Math.round(((queueIndex + filePercent / 100) / pendingIndexes.length) * 100);
+
+            setPointsBatchProgress({
+              total: pendingIndexes.length,
+              completed,
+              failed,
+              currentLabel: nextFiles[fileIndex].name,
+              progress: {
+                ...mappedProgress,
+                message: `${chunkLabel}: ${mappedProgress.message}`,
+                percent: overallPercent,
+              },
+            });
+          };
+
+          const pageImages = await convertPdfToImages(nextFiles[fileIndex].file, onChunkProgress, {
+            startPage: range.startPage,
+            endPage: range.endPage,
+          });
+
+          const payloadChars = pageImages.reduce((sum, image) => sum + image.length, 0);
+          if (payloadChars > POINTS_MAX_IMAGE_PAYLOAD_CHARS) {
+            throw new Error(
+              `Chunk ${chunkIndex + 1} payload is too large for API limits. Please split this presentation manually.`,
+            );
+          }
+
+          const chunkResult = await analyzePresentation(
+            pageImages,
+            (message) => onChunkProgress(message),
+            range.startPage - 1,
+          );
+          chunkResults.push(chunkResult);
+        }
+
+        if (chunkResults.length === 0) {
+          throw new Error('No analyzable chunks were produced for this presentation.');
+        }
+
+        const result = mergePointsChunkResults(chunkResults);
+        if (result.slides.length === 0) {
+          throw new Error('No valid insight slides were selected across chunks.');
+        }
+        const completionMessage =
+          result.slides.length < 3
+            ? `Analysis complete with ${result.slides.length} high-signal slide${result.slides.length === 1 ? '' : 's'}.`
+            : 'Analysis complete.';
+
         nextFiles[fileIndex] = {
           ...nextFiles[fileIndex],
           status: 'complete',
           result,
           progress: {
             stage: 'complete',
-            message: 'Analysis complete.',
+            message: completionMessage,
             percent: 100,
           },
         };
@@ -576,7 +668,7 @@ const App: React.FC = () => {
     setPointsBatchFiles((prev) => prev.filter((file) => file.id !== id));
   };
 
-  const clearAll = () => {
+  const clearChatter = () => {
     setBatchFiles([]);
     setTextInput('');
     setChatterSingleState({ status: 'idle' });
@@ -584,14 +676,15 @@ const App: React.FC = () => {
     setIsAnalyzingBatch(false);
     setCopyAllStatus('idle');
     setCopyAllErrorMessage('');
+    if (chatterFileInputRef.current) chatterFileInputRef.current.value = '';
+  };
 
+  const clearPoints = () => {
     setPointsBatchFiles([]);
     setIsAnalyzingPointsBatch(false);
     setPointsBatchProgress(null);
     setPointsCopyAllStatus('idle');
     setPointsCopyAllErrorMessage('');
-
-    if (chatterFileInputRef.current) chatterFileInputRef.current.value = '';
     if (pointsFileInputRef.current) pointsFileInputRef.current.value = '';
   };
 
@@ -698,7 +791,7 @@ const App: React.FC = () => {
 
         <div className="mt-5 pt-4 border-t border-line flex gap-3">
           <button
-            onClick={clearAll}
+            onClick={clearChatter}
             disabled={isChatterLoading}
             className="px-4 py-2.5 rounded-xl border border-line text-sm font-semibold text-stone hover:text-ink disabled:opacity-50"
           >
@@ -893,7 +986,7 @@ const App: React.FC = () => {
 
         <div className="mt-5 pt-4 border-t border-line flex gap-3">
           <button
-            onClick={clearAll}
+            onClick={clearPoints}
             disabled={isPointsLoading}
             className="px-4 py-2.5 rounded-xl border border-line text-sm font-semibold text-stone hover:text-ink disabled:opacity-50"
           >
@@ -1017,7 +1110,6 @@ const App: React.FC = () => {
               <button
                 onClick={() => {
                   setAppMode('chatter');
-                  clearAll();
                 }}
                 className={`flex-1 rounded-lg py-2 text-sm font-semibold transition ${
                   appMode === 'chatter' ? 'bg-canvas text-ink shadow-sm' : 'text-stone hover:text-ink'
@@ -1028,7 +1120,6 @@ const App: React.FC = () => {
               <button
                 onClick={() => {
                   setAppMode('points');
-                  clearAll();
                 }}
                 className={`flex-1 rounded-lg py-2 text-sm font-semibold transition ${
                   appMode === 'points' ? 'bg-canvas text-ink shadow-sm' : 'text-stone hover:text-ink'

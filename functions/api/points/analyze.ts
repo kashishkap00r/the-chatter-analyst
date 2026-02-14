@@ -23,6 +23,8 @@ const error = (status: number, code: string, message: string): Response =>
 const hasNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value.trim().length > 0;
 
+const disallowedContextStart = /^(in this slide|this slide shows|the slide shows)\b/i;
+
 const validatePointsResult = (result: any, maxPageCount: number): string | null => {
   if (!result || typeof result !== "object") {
     return "Gemini response is not a JSON object.";
@@ -63,6 +65,15 @@ const validatePointsResult = (result: any, maxPageCount: number): string | null 
 
     if (!hasNonEmptyString(slide.context)) {
       return `Slide #${slideIndex} is missing 'context'.`;
+    }
+
+    const normalizedContext = slide.context.trim();
+    if (disallowedContextStart.test(normalizedContext)) {
+      return `Slide #${slideIndex} context must not start with generic narration.`;
+    }
+
+    if (normalizedContext.length < 80) {
+      return `Slide #${slideIndex} context is too short for an insight-led explanation.`;
     }
   }
 

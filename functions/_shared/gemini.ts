@@ -160,7 +160,15 @@ SLIDE SELECTION RULES
 SLIDE OUTPUT FORMAT
 - For each selected slide, return:
   a) selectedPageNumber (1-indexed)
-  b) context: one concise paragraph explaining why the slide matters to an investor.
+  b) context: one insight-first paragraph with this structure:
+     - Start directly with what has changed or what stands out in the slide data.
+     - Include 2-3 concrete observations from the slide (mix, trend, comparison, composition shift, concentration, etc.).
+     - End with one investor implication sentence (what this means for business quality, risk, growth durability, margins, or industry structure).
+
+CONTEXT QUALITY RULES
+- Do not explain how to read the chart/table.
+- Do not start context with phrases like "In this slide", "This slide shows", or "The slide shows".
+- Avoid vague narration; include concrete directionality or mix shift wherever visible (for example, share increase/decrease by segment).
 
 OUTPUT RULES
 - Return one JSON object with companyName, fiscalPeriod, nseScrip, marketCapCategory, industry, companyDescription, and slides.
