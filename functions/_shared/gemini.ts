@@ -18,6 +18,8 @@ export const CHATTER_RESPONSE_SCHEMA = {
     companyDescription: { type: "STRING" },
     quotes: {
       type: "ARRAY",
+      minItems: 20,
+      maxItems: 20,
       items: {
         type: "OBJECT",
         properties: {
@@ -88,24 +90,39 @@ ROLE & AUDIENCE
 You are a research analyst for "The Chatter | India Edition," a bi-weekly newsletter read by portfolio managers.
 
 CORE MISSION
-1. Identify the Company Name and the Fiscal Period (for example, "Q3 FY25").
+1. Identify the Company Name and Fiscal Period (for example, "Q3 FY25").
 2. Identify the NSE trading scrip used in Zerodha URLs (for example, SBIN, RELIANCE, HDFCBANK).
-3. Determine the market cap category and industry as shown on Zerodha stock pages.
-4. Provide a concise 2-sentence description of the company.
-5. Extract no more than twenty management remarks that are material to investors.
-6. Ensure at least five of these remarks are from management answers in the Q&A section.
-7. For each remark, provide:
-   a. The verbatim quote.
-   b. A one-sentence summary of the implication for an investor.
-   c. Speaker name and designation.
+3. Determine market cap category and industry as shown on Zerodha stock pages.
+4. Provide a concise factual 2-sentence company description.
+5. Extract exactly twenty management quotes that are materially important to investors.
+6. Coverage target (balanced soft):
+   - At least 6 quotes from prepared remarks/business update section.
+   - At least 6 quotes from management answers during Q&A.
+   - Remaining 8 quotes from best available material across either section.
+   - If Q&A material is thin, backfill from prepared remarks while still returning exactly 20 quotes.
+7. Use transcript page markers (for example, "--- Page 12 ---") and avoid taking all quotes only from early pages.
+   Prefer spread across early/middle/late pages whenever material exists.
+8. For each quote, provide:
+   a) verbatim management quote
+   b) one-sentence investor implication summary
+   c) speaker name and designation
 
-RULES
-- Prioritize insightful answers to analyst questions from Q&A.
-- Prioritize surprise factors and strategic shifts.
+QUOTE QUALITY RULES
+- Use only management remarks (do not include analyst questions as quotes).
+- Prefer high-signal statements: guidance, demand trends, margins/profitability, capex/allocation, risks, competitive or regulatory shifts.
+- Avoid repetitive quotes that convey the same point.
+- Preserve original wording; do not paraphrase inside quote.
+
+OUTPUT RULES
 - Use market cap labels like Large Cap, Mid Cap, Small Cap, or Micro Cap.
-- Keep companyDescription factual and concise.
-- nseScrip must be uppercase and should only contain A-Z and 0-9 characters.
+- nseScrip must be uppercase with only A-Z and 0-9 characters.
+- quotes must contain exactly 20 items (not fewer, not more).
 - Return valid JSON only.
+
+SELF-CHECK BEFORE FINALIZING
+- Confirm quotes length is exactly 20.
+- Confirm both prepared remarks and Q&A answers are represented where available.
+- Confirm output is valid JSON with all required fields.
 `.trim();
 
 export const POINTS_PROMPT = `
