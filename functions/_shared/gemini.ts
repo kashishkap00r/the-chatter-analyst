@@ -184,7 +184,7 @@ const stripJsonFence = (text: string): string =>
     .trim();
 
 const REQUEST_TIMEOUT_MS = 30000;
-const MAX_AI_STUDIO_ATTEMPTS = 4;
+const MAX_AI_STUDIO_ATTEMPTS = 6;
 const RETRY_BASE_DELAY_MS = 200;
 const RETRY_MAX_DELAY_MS = 1600;
 const TRANSIENT_STATUS_CODES = new Set([500, 502, 503, 504]);
