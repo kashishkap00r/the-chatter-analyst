@@ -1,7 +1,14 @@
-import { callGeminiJson, POINTS_PROMPT, POINTS_RESPONSE_SCHEMA } from "../../_shared/gemini";
+import {
+  callGeminiJson,
+  POINTS_PROMPT,
+  POINTS_RESPONSE_SCHEMA,
+  normalizeGeminiProviderPreference,
+} from "../../_shared/gemini";
 
 interface Env {
   GEMINI_API_KEY?: string;
+  VERTEX_API_KEY?: string;
+  GEMINI_PROVIDER?: string;
 }
 
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
@@ -54,6 +61,14 @@ const isUpstreamRateLimit = (message: string): boolean => {
     normalized.includes("too many requests") ||
     normalized.includes("resource exhausted") ||
     normalized.includes("generate_content_free_tier_requests")
+  );
+};
+
+const isLocationUnsupportedError = (message: string): boolean => {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("user location is not supported for the api use") ||
+    normalized.includes("location is not supported for the api use")
   );
 };
 
@@ -141,9 +156,10 @@ const extractBase64 = (dataUri: string): string => {
 export async function onRequestPost(context: any): Promise<Response> {
   const request = context.request as Request;
   const env = context.env as Env;
+  const primaryApiKey = env?.GEMINI_API_KEY || env?.VERTEX_API_KEY;
 
-  if (!env?.GEMINI_API_KEY) {
-    return error(500, "INTERNAL", "Server is missing GEMINI_API_KEY.", "MISSING_GEMINI_KEY");
+  if (!primaryApiKey) {
+    return error(500, "INTERNAL", "Server is missing GEMINI_API_KEY / VERTEX_API_KEY.", "MISSING_GEMINI_KEY");
   }
 
   const contentLength = Number(request.headers.get("content-length") || "0");
@@ -164,6 +180,7 @@ export async function onRequestPost(context: any): Promise<Response> {
   }
 
   const model = typeof body?.model === "string" ? body.model : DEFAULT_MODEL;
+  const providerPreference = normalizeGeminiProviderPreference(env?.GEMINI_PROVIDER);
   if (!ALLOWED_MODELS.has(model)) {
     return error(400, "BAD_REQUEST", "Field 'model' is invalid.", "INVALID_MODEL");
   }
@@ -190,7 +207,9 @@ export async function onRequestPost(context: any): Promise<Response> {
 
   try {
     const result = await callGeminiJson({
-      apiKey: env.GEMINI_API_KEY,
+      apiKey: primaryApiKey,
+      vertexApiKey: env.VERTEX_API_KEY,
+      providerPreference,
       model,
       contents: [
         {
@@ -242,6 +261,15 @@ export async function onRequestPost(context: any): Promise<Response> {
 
     if (message.toLowerCase().includes("timed out") || message.toLowerCase().includes("timeout")) {
       return error(UPSTREAM_DEPENDENCY_STATUS, "UPSTREAM_ERROR", "Upstream request timed out. Please retry.", "UPSTREAM_TIMEOUT");
+    }
+
+    if (isLocationUnsupportedError(message)) {
+      return error(
+        UPSTREAM_DEPENDENCY_STATUS,
+        "UPSTREAM_ERROR",
+        "Gemini request blocked by provider location policy. Configure VERTEX_API_KEY and keep GEMINI_PROVIDER=auto (or set GEMINI_PROVIDER=vertex_express).",
+        "UPSTREAM_LOCATION_UNSUPPORTED",
+      );
     }
 
     if (message.includes("500") || message.includes("502") || message.includes("504")) {

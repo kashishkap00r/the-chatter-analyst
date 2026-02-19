@@ -1,4 +1,8 @@
-const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
+const AI_STUDIO_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
+const VERTEX_EXPRESS_API_BASE = "https://aiplatform.googleapis.com/v1beta1/publishers/google/models";
+
+export type GeminiProvider = "ai_studio" | "vertex_express";
+export type GeminiProviderPreference = GeminiProvider | "auto";
 
 export const SAFETY_SETTINGS = [
   { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
@@ -179,56 +183,120 @@ const stripJsonFence = (text: string): string =>
     .replace(/```\s*/g, "")
     .trim();
 
-const parseErrorMessage = (payload: any, status: number): string => {
+const parseErrorMessage = (payload: any, status: number, provider: GeminiProvider): string => {
   if (typeof payload?.error?.message === "string" && payload.error.message.trim()) {
-    return payload.error.message;
+    return `Gemini (${provider}) request failed with status ${status}: ${payload.error.message.trim()}`;
   }
-  return `Gemini request failed with status ${status}.`;
+  return `Gemini (${provider}) request failed with status ${status}.`;
+};
+
+const isLocationUnsupportedError = (message: string): boolean => {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("user location is not supported for the api use") ||
+    normalized.includes("location is not supported for the api use")
+  );
+};
+
+export const normalizeGeminiProviderPreference = (value: unknown): GeminiProviderPreference => {
+  if (typeof value !== "string") return "auto";
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "ai_studio") return "ai_studio";
+  if (normalized === "vertex_express") return "vertex_express";
+  return "auto";
+};
+
+const resolveProviderOrder = (preference: GeminiProviderPreference): GeminiProvider[] => {
+  if (preference === "ai_studio") return ["ai_studio"];
+  if (preference === "vertex_express") return ["vertex_express"];
+  return ["ai_studio", "vertex_express"];
+};
+
+const endpointForProvider = (provider: GeminiProvider, model: string, apiKey: string): string => {
+  const base = provider === "ai_studio" ? AI_STUDIO_API_BASE : VERTEX_EXPRESS_API_BASE;
+  return `${base}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 };
 
 export const callGeminiJson = async (params: {
   apiKey: string;
+  vertexApiKey?: string;
   model: string;
   contents: unknown;
   responseSchema: unknown;
+  providerPreference?: GeminiProviderPreference;
 }): Promise<any> => {
-  const { apiKey, model, contents, responseSchema } = params;
-  const endpoint = `${GEMINI_API_BASE}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const { apiKey, vertexApiKey, model, contents, responseSchema } = params;
+  const providerPreference = normalizeGeminiProviderPreference(params.providerPreference);
+  const providers = resolveProviderOrder(providerPreference);
+  const providerErrors: string[] = [];
 
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      contents,
-      safetySettings: SAFETY_SETTINGS,
-      generationConfig: {
-        responseMimeType: "application/json",
-        responseSchema,
-      },
-    }),
-  });
+  for (let index = 0; index < providers.length; index++) {
+    const provider = providers[index];
+    const keyForProvider = provider === "vertex_express" ? vertexApiKey || apiKey : apiKey;
+    const endpoint = endpointForProvider(provider, model, keyForProvider);
+    const isLastAttempt = index === providers.length - 1;
 
-  let payload: any = null;
-  try {
-    payload = await response.json();
-  } catch {
-    // Keep null payload; handled below.
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          contents,
+          safetySettings: SAFETY_SETTINGS,
+          generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema,
+          },
+        }),
+      });
+
+      let payload: any = null;
+      try {
+        payload = await response.json();
+      } catch {
+        // Keep null payload; handled below.
+      }
+
+      if (!response.ok) {
+        const message = parseErrorMessage(payload, response.status, provider);
+        providerErrors.push(message);
+
+        const shouldFallbackToVertex =
+          !isLastAttempt && provider === "ai_studio" && providers[index + 1] === "vertex_express" && isLocationUnsupportedError(message);
+        if (shouldFallbackToVertex) {
+          continue;
+        }
+
+        throw new Error(providerErrors.join(" | "));
+      }
+
+      const text = parseGeminiText(payload);
+      if (!text) {
+        throw new Error(`Gemini (${provider}) returned an empty response.`);
+      }
+
+      try {
+        return JSON.parse(stripJsonFence(text));
+      } catch {
+        throw new Error(`Gemini (${provider}) returned invalid JSON.`);
+      }
+    } catch (error: any) {
+      const message = String(error?.message || "Unknown Gemini request failure.");
+      if (!providerErrors.includes(message)) {
+        providerErrors.push(message);
+      }
+
+      const shouldFallbackToVertex =
+        !isLastAttempt && provider === "ai_studio" && providers[index + 1] === "vertex_express" && isLocationUnsupportedError(message);
+      if (shouldFallbackToVertex) {
+        continue;
+      }
+
+      throw new Error(providerErrors.join(" | "));
+    }
   }
 
-  if (!response.ok) {
-    throw new Error(parseErrorMessage(payload, response.status));
-  }
-
-  const text = parseGeminiText(payload);
-  if (!text) {
-    throw new Error("Gemini returned an empty response.");
-  }
-
-  try {
-    return JSON.parse(stripJsonFence(text));
-  } catch {
-    throw new Error("Gemini returned invalid JSON.");
-  }
+  throw new Error(providerErrors.join(" | ") || "Unknown Gemini request failure.");
 };
