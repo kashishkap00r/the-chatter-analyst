@@ -30,9 +30,9 @@ Commands:
 4. Set secret environment variable in Pages:
    - `GEMINI_API_KEY`
    - Optional fallback key: `VERTEX_API_KEY`
-   - Optional provider mode: `GEMINI_PROVIDER` (`auto`, `ai_studio`, `vertex_express`; default `auto`)
+   - Optional provider mode: `GEMINI_PROVIDER` (`ai_studio`, `auto`, `vertex_express`; default `ai_studio`)
 
-If AI Studio returns `User location is not supported for the API use.`, keep `GEMINI_PROVIDER=auto` and add
+If AI Studio returns `User location is not supported for the API use.`, set `GEMINI_PROVIDER=auto` and add
 `VERTEX_API_KEY` so backend requests can automatically fall back to Vertex Express.
 
 Health check endpoint:

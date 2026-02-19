@@ -201,11 +201,12 @@ const isLocationUnsupportedError = (message: string): boolean => {
 };
 
 export const normalizeGeminiProviderPreference = (value: unknown): GeminiProviderPreference => {
-  if (typeof value !== "string") return "auto";
+  if (typeof value !== "string") return "ai_studio";
   const normalized = value.trim().toLowerCase();
+  if (normalized === "auto") return "auto";
   if (normalized === "ai_studio") return "ai_studio";
   if (normalized === "vertex_express") return "vertex_express";
-  return "auto";
+  return "ai_studio";
 };
 
 const resolveProviderOrder = (preference: GeminiProviderPreference, hasVertexFallback: boolean): GeminiProvider[] => {
