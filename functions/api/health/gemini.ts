@@ -141,7 +141,9 @@ const runModelProbe = async (apiKey: string, model: string): Promise<ModelHealth
     };
   } catch (error: any) {
     const message = String(error?.message || "Unknown request failure");
-    const state: HealthState = message.toLowerCase().includes("abort") ? "timeout" : "upstream_error";
+    const normalized = message.toLowerCase();
+    const state: HealthState =
+      normalized.includes("abort") || normalized.includes("timeout") ? "timeout" : "upstream_error";
     return {
       model,
       state,
