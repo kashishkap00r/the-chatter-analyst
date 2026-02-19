@@ -183,6 +183,8 @@ const stripJsonFence = (text: string): string =>
     .replace(/```\s*/g, "")
     .trim();
 
+const MAX_LOCATION_RETRY_ATTEMPTS = 3;
+
 const parseErrorMessage = (payload: any, status: number, provider: GeminiProvider): string => {
   if (typeof payload?.error?.message === "string" && payload.error.message.trim()) {
     return `Gemini (${provider}) request failed with status ${status}: ${payload.error.message.trim()}`;
@@ -206,10 +208,10 @@ export const normalizeGeminiProviderPreference = (value: unknown): GeminiProvide
   return "auto";
 };
 
-const resolveProviderOrder = (preference: GeminiProviderPreference): GeminiProvider[] => {
+const resolveProviderOrder = (preference: GeminiProviderPreference, hasVertexFallback: boolean): GeminiProvider[] => {
   if (preference === "ai_studio") return ["ai_studio"];
   if (preference === "vertex_express") return ["vertex_express"];
-  return ["ai_studio", "vertex_express"];
+  return hasVertexFallback ? ["ai_studio", "vertex_express"] : ["ai_studio"];
 };
 
 const endpointForProvider = (provider: GeminiProvider, model: string, apiKey: string): string => {
@@ -227,74 +229,93 @@ export const callGeminiJson = async (params: {
 }): Promise<any> => {
   const { apiKey, vertexApiKey, model, contents, responseSchema } = params;
   const providerPreference = normalizeGeminiProviderPreference(params.providerPreference);
-  const providers = resolveProviderOrder(providerPreference);
+  const hasVertexFallback = typeof vertexApiKey === "string" && vertexApiKey.trim().length > 0;
+  const providers = resolveProviderOrder(providerPreference, hasVertexFallback);
   const providerErrors: string[] = [];
 
   for (let index = 0; index < providers.length; index++) {
     const provider = providers[index];
-    const keyForProvider = provider === "vertex_express" ? vertexApiKey || apiKey : apiKey;
-    const endpoint = endpointForProvider(provider, model, keyForProvider);
-    const isLastAttempt = index === providers.length - 1;
+    const keyForProvider = provider === "vertex_express" ? vertexApiKey?.trim() || apiKey : apiKey;
+    const isLastProvider = index === providers.length - 1;
+    const maxAttempts = provider === "ai_studio" ? MAX_LOCATION_RETRY_ATTEMPTS : 1;
 
-    try {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          contents,
-          safetySettings: SAFETY_SETTINGS,
-          generationConfig: {
-            responseMimeType: "application/json",
-            responseSchema,
-          },
-        }),
-      });
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const endpoint = endpointForProvider(provider, model, keyForProvider);
 
-      let payload: any = null;
       try {
-        payload = await response.json();
-      } catch {
-        // Keep null payload; handled below.
-      }
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            contents,
+            safetySettings: SAFETY_SETTINGS,
+            generationConfig: {
+              responseMimeType: "application/json",
+              responseSchema,
+            },
+          }),
+        });
 
-      if (!response.ok) {
-        const message = parseErrorMessage(payload, response.status, provider);
-        providerErrors.push(message);
+        let payload: any = null;
+        try {
+          payload = await response.json();
+        } catch {
+          // Keep null payload; handled below.
+        }
+
+        if (!response.ok) {
+          const message = parseErrorMessage(payload, response.status, provider);
+          if (!providerErrors.includes(message)) {
+            providerErrors.push(message);
+          }
+
+          const shouldRetryLocationFailure =
+            provider === "ai_studio" && attempt < maxAttempts && isLocationUnsupportedError(message);
+          if (shouldRetryLocationFailure) {
+            continue;
+          }
+
+          const shouldFallbackToVertex =
+            !isLastProvider && provider === "ai_studio" && providers[index + 1] === "vertex_express" && isLocationUnsupportedError(message);
+          if (shouldFallbackToVertex) {
+            break;
+          }
+
+          throw new Error(providerErrors.join(" | "));
+        }
+
+        const text = parseGeminiText(payload);
+        if (!text) {
+          throw new Error(`Gemini (${provider}) returned an empty response.`);
+        }
+
+        try {
+          return JSON.parse(stripJsonFence(text));
+        } catch {
+          throw new Error(`Gemini (${provider}) returned invalid JSON.`);
+        }
+      } catch (error: any) {
+        const message = String(error?.message || "Unknown Gemini request failure.");
+        if (!providerErrors.includes(message)) {
+          providerErrors.push(message);
+        }
+
+        const shouldRetryLocationFailure =
+          provider === "ai_studio" && attempt < maxAttempts && isLocationUnsupportedError(message);
+        if (shouldRetryLocationFailure) {
+          continue;
+        }
 
         const shouldFallbackToVertex =
-          !isLastAttempt && provider === "ai_studio" && providers[index + 1] === "vertex_express" && isLocationUnsupportedError(message);
+          !isLastProvider && provider === "ai_studio" && providers[index + 1] === "vertex_express" && isLocationUnsupportedError(message);
         if (shouldFallbackToVertex) {
-          continue;
+          break;
         }
 
         throw new Error(providerErrors.join(" | "));
       }
-
-      const text = parseGeminiText(payload);
-      if (!text) {
-        throw new Error(`Gemini (${provider}) returned an empty response.`);
-      }
-
-      try {
-        return JSON.parse(stripJsonFence(text));
-      } catch {
-        throw new Error(`Gemini (${provider}) returned invalid JSON.`);
-      }
-    } catch (error: any) {
-      const message = String(error?.message || "Unknown Gemini request failure.");
-      if (!providerErrors.includes(message)) {
-        providerErrors.push(message);
-      }
-
-      const shouldFallbackToVertex =
-        !isLastAttempt && provider === "ai_studio" && providers[index + 1] === "vertex_express" && isLocationUnsupportedError(message);
-      if (shouldFallbackToVertex) {
-        continue;
-      }
-
-      throw new Error(providerErrors.join(" | "));
     }
   }
 

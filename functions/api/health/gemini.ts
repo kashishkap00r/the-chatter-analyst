@@ -29,6 +29,7 @@ const AI_STUDIO_API_BASE = "https://generativelanguage.googleapis.com/v1beta/mod
 const VERTEX_EXPRESS_API_BASE = "https://aiplatform.googleapis.com/v1beta1/publishers/google/models";
 const MODELS = ["gemini-2.5-flash", "gemini-3-pro-preview"] as const;
 const REQUEST_TIMEOUT_MS = 15000;
+const MAX_LOCATION_RETRY_ATTEMPTS = 3;
 
 const json = (payload: unknown, status = 200): Response =>
   new Response(JSON.stringify(payload), {
@@ -114,10 +115,10 @@ const parseGeminiMessage = async (response: Response): Promise<string> => {
   return `Gemini responded with status ${response.status}.`;
 };
 
-const resolveProviderOrder = (preference: GeminiProviderPreference): GeminiProvider[] => {
+const resolveProviderOrder = (preference: GeminiProviderPreference, hasVertexFallback: boolean): GeminiProvider[] => {
   if (preference === "ai_studio") return ["ai_studio"];
   if (preference === "vertex_express") return ["vertex_express"];
-  return ["ai_studio", "vertex_express"];
+  return hasVertexFallback ? ["ai_studio", "vertex_express"] : ["ai_studio"];
 };
 
 const providerBase = (provider: GeminiProvider): string =>
@@ -193,12 +194,13 @@ const runModelProbe = async (params: {
   providerPreference: GeminiProviderPreference;
 }): Promise<ModelHealth> => {
   const { model, geminiApiKey, vertexApiKey, providerPreference } = params;
-  const providers = resolveProviderOrder(providerPreference);
+  const hasVertexFallback = typeof vertexApiKey === "string" && vertexApiKey.trim().length > 0;
+  const providers = resolveProviderOrder(providerPreference, hasVertexFallback);
   let lastResult: ModelHealth | null = null;
 
   for (let index = 0; index < providers.length; index++) {
     const provider = providers[index];
-    const key = provider === "vertex_express" ? vertexApiKey || geminiApiKey : geminiApiKey;
+    const key = provider === "vertex_express" ? vertexApiKey : geminiApiKey;
 
     if (!key) {
       lastResult = {
@@ -210,17 +212,25 @@ const runModelProbe = async (params: {
       continue;
     }
 
-    const result = await runSingleProbe(key, model, provider);
-    lastResult = result;
+    const maxAttempts = provider === "ai_studio" ? MAX_LOCATION_RETRY_ATTEMPTS : 1;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const result = await runSingleProbe(key, model, provider);
+      lastResult = result;
 
-    const shouldTryFallback =
-      index < providers.length - 1 && result.provider === "ai_studio" && result.state === "location_unsupported";
+      const shouldRetryLocation =
+        provider === "ai_studio" && result.state === "location_unsupported" && attempt < maxAttempts;
+      if (shouldRetryLocation) {
+        continue;
+      }
 
-    if (shouldTryFallback) {
-      continue;
+      const shouldTryFallback =
+        index < providers.length - 1 && result.provider === "ai_studio" && result.state === "location_unsupported";
+      if (shouldTryFallback) {
+        break;
+      }
+
+      return result;
     }
-
-    return result;
   }
 
   return (
