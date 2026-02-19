@@ -5,6 +5,8 @@ interface Env {
   GEMINI_API_KEY?: string;
   VERTEX_API_KEY?: string;
   GEMINI_PROVIDER?: string;
+  OPENROUTER_API_KEY?: string;
+  OPENROUTER_MODEL?: string;
 }
 
 type HealthState =
@@ -227,6 +229,11 @@ const handleGeminiHealth = async (context: any): Promise<Response> => {
       keyConfigured: false,
       keyState: "missing",
       providerPreference,
+      openRouterConfigured: Boolean(env?.OPENROUTER_API_KEY),
+      openRouterModel:
+        typeof env?.OPENROUTER_MODEL === "string" && env.OPENROUTER_MODEL.trim()
+          ? env.OPENROUTER_MODEL.trim()
+          : "openrouter/free",
       message: missingKeyMessage(providerPreference),
       models: [],
     });
@@ -257,6 +264,11 @@ const handleGeminiHealth = async (context: any): Promise<Response> => {
     keyConfigured: true,
     keyState,
     providerPreference,
+    openRouterConfigured: Boolean(env?.OPENROUTER_API_KEY),
+    openRouterModel:
+      typeof env?.OPENROUTER_MODEL === "string" && env.OPENROUTER_MODEL.trim()
+        ? env.OPENROUTER_MODEL.trim()
+        : "openrouter/free",
     models: modelResults,
     guidance,
   });

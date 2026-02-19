@@ -1,5 +1,6 @@
 import {
   callGeminiJson,
+  callOpenRouterJson,
   POINTS_PROMPT,
   POINTS_RESPONSE_SCHEMA,
   normalizeGeminiProviderPreference,
@@ -9,12 +10,17 @@ interface Env {
   GEMINI_API_KEY?: string;
   VERTEX_API_KEY?: string;
   GEMINI_PROVIDER?: string;
+  OPENROUTER_API_KEY?: string;
+  OPENROUTER_MODEL?: string;
+  OPENROUTER_SITE_URL?: string;
+  OPENROUTER_APP_TITLE?: string;
 }
 
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
 const MAX_PAGES = 60;
 const MAX_TOTAL_IMAGE_CHARS = 20 * 1024 * 1024;
 const DEFAULT_MODEL = "gemini-2.5-flash";
+const OPENROUTER_DEFAULT_MODEL = "openrouter/free";
 const ALLOWED_MODELS = new Set(["gemini-2.5-flash", "gemini-3-pro-preview"]);
 const IS_STRICT_VALIDATION: boolean = false;
 const UPSTREAM_DEPENDENCY_STATUS = 424;
@@ -181,6 +187,7 @@ export async function onRequestPost(context: any): Promise<Response> {
   }
 
   const model = typeof body?.model === "string" ? body.model : DEFAULT_MODEL;
+  const enableOpenRouterFallback = body?.enableOpenRouterFallback === true;
   const providerPreference = normalizeGeminiProviderPreference(env?.GEMINI_PROVIDER);
   if (!ALLOWED_MODELS.has(model)) {
     return error(400, "BAD_REQUEST", "Field 'model' is invalid.", "INVALID_MODEL");
@@ -273,7 +280,100 @@ export async function onRequestPost(context: any): Promise<Response> {
       }),
     );
 
-    if (isUpstreamRateLimit(message)) {
+    let openRouterFallbackError: string | undefined;
+    const isOverload = message.includes("503") || message.toLowerCase().includes("overload");
+    const isImageProcessing = message.toLowerCase().includes("unable to process input image");
+    const isTimeout = message.toLowerCase().includes("timed out") || message.toLowerCase().includes("timeout");
+    const isLocationBlocked = isLocationUnsupportedError(message);
+    const isTransient = message.includes("500") || message.includes("502") || message.includes("504");
+    const isRateLimited = isUpstreamRateLimit(message);
+
+    const canAttemptOpenRouterFallback =
+      enableOpenRouterFallback &&
+      Boolean(env.OPENROUTER_API_KEY) &&
+      (isRateLimited || isOverload || isImageProcessing || isTimeout || isLocationBlocked || isTransient);
+
+    if (canAttemptOpenRouterFallback) {
+      const openRouterModel =
+        typeof env.OPENROUTER_MODEL === "string" && env.OPENROUTER_MODEL.trim()
+          ? env.OPENROUTER_MODEL.trim()
+          : OPENROUTER_DEFAULT_MODEL;
+
+      try {
+        console.log(
+          JSON.stringify({
+            event: "points_openrouter_fallback_start",
+            requestId,
+            model,
+            openRouterModel,
+          }),
+        );
+
+        const fallbackResult = await callOpenRouterJson({
+          apiKey: env.OPENROUTER_API_KEY as string,
+          model: openRouterModel,
+          requestId,
+          referer: env.OPENROUTER_SITE_URL,
+          appTitle: env.OPENROUTER_APP_TITLE || "The Chatter Analyst",
+          messageContent: [
+            {
+              type: "text",
+              text:
+                `${POINTS_PROMPT}\n\n` +
+                "FINAL OUTPUT REQUIREMENT: Return only one valid JSON object. No markdown, no explanation.",
+            },
+            ...pageImages.map((dataUri) => ({
+              type: "image_url" as const,
+              image_url: { url: dataUri },
+            })),
+          ],
+        });
+
+        const fallbackValidationError = validatePointsResult(fallbackResult, pageImages.length);
+        if (fallbackValidationError) {
+          openRouterFallbackError = `OpenRouter validation failed: ${fallbackValidationError}`;
+          console.log(
+            JSON.stringify({
+              event: "points_openrouter_fallback_validation_failed",
+              requestId,
+              model,
+              openRouterModel,
+              fallbackValidationError,
+            }),
+          );
+        } else {
+          console.log(
+            JSON.stringify({
+              event: "points_openrouter_fallback_success",
+              requestId,
+              model,
+              openRouterModel,
+            }),
+          );
+          return json(fallbackResult);
+        }
+      } catch (openRouterError: any) {
+        openRouterFallbackError = String(openRouterError?.message || "OpenRouter fallback failed.");
+        console.log(
+          JSON.stringify({
+            event: "points_openrouter_fallback_failed",
+            requestId,
+            model,
+            openRouterModel,
+            openRouterFallbackError,
+          }),
+        );
+      }
+    }
+
+    const details = {
+      requestId,
+      model,
+      openRouterFallbackEnabled: enableOpenRouterFallback,
+      ...(openRouterFallbackError ? { openRouterFallbackError } : {}),
+    };
+
+    if (isRateLimited) {
       const retryAfterSeconds = extractRetryAfterSeconds(message);
       return error(
         429,
@@ -282,57 +382,57 @@ export async function onRequestPost(context: any): Promise<Response> {
           ? `Gemini quota/rate limit reached. Retry in about ${retryAfterSeconds}s.`
           : "Gemini quota/rate limit reached. Please retry shortly.",
         "UPSTREAM_RATE_LIMIT",
-        { requestId, model },
+        details,
       );
     }
 
-    if (message.includes("503") || message.toLowerCase().includes("overload")) {
+    if (isOverload) {
       return error(
         UPSTREAM_DEPENDENCY_STATUS,
         "UPSTREAM_ERROR",
         "Gemini is temporarily overloaded. Please retry.",
         "UPSTREAM_OVERLOAD",
-        { requestId, model },
+        details,
       );
     }
 
-    if (message.toLowerCase().includes("unable to process input image")) {
+    if (isImageProcessing) {
       return error(
         UPSTREAM_DEPENDENCY_STATUS,
         "UPSTREAM_ERROR",
         "Gemini could not process one or more slide images for this chunk. Retrying may work.",
         "UPSTREAM_IMAGE_PROCESSING",
-        { requestId, model },
+        details,
       );
     }
 
-    if (message.toLowerCase().includes("timed out") || message.toLowerCase().includes("timeout")) {
+    if (isTimeout) {
       return error(
         UPSTREAM_DEPENDENCY_STATUS,
         "UPSTREAM_ERROR",
         "Upstream request timed out. Please retry.",
         "UPSTREAM_TIMEOUT",
-        { requestId, model },
+        details,
       );
     }
 
-    if (isLocationUnsupportedError(message)) {
+    if (isLocationBlocked) {
       return error(
         UPSTREAM_DEPENDENCY_STATUS,
         "UPSTREAM_ERROR",
         "Gemini request was temporarily blocked by provider location policy. Please retry.",
         "UPSTREAM_LOCATION_UNSUPPORTED",
-        { requestId, model },
+        details,
       );
     }
 
-    if (message.includes("500") || message.includes("502") || message.includes("504")) {
+    if (isTransient) {
       return error(
         UPSTREAM_DEPENDENCY_STATUS,
         "UPSTREAM_ERROR",
         "Gemini request failed upstream. Please retry.",
         "UPSTREAM_TRANSIENT",
-        { requestId, model },
+        details,
       );
     }
 
@@ -341,7 +441,7 @@ export async function onRequestPost(context: any): Promise<Response> {
       "UPSTREAM_ERROR",
       `Presentation analysis failed: ${message}`,
       "UPSTREAM_FAILURE",
-      { requestId, model },
+      details,
     );
   }
 }

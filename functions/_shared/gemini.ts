@@ -1,5 +1,6 @@
 const AI_STUDIO_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 const VERTEX_EXPRESS_API_BASE = "https://aiplatform.googleapis.com/v1beta1/publishers/google/models";
+const OPENROUTER_API_BASE = "https://openrouter.ai/api/v1/chat/completions";
 
 export type GeminiProvider = "ai_studio" | "vertex_express";
 export type GeminiProviderPreference = GeminiProvider;
@@ -177,6 +178,20 @@ const parseGeminiText = (payload: any): string => {
     .trim();
 };
 
+const parseOpenRouterText = (payload: any): string => {
+  const content = payload?.choices?.[0]?.message?.content;
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((item: any) => (typeof item?.text === "string" ? item.text : ""))
+      .join("\n")
+      .trim();
+  }
+  return "";
+};
+
 const stripJsonFence = (text: string): string =>
   text
     .replace(/```json\s*/gi, "")
@@ -188,12 +203,24 @@ const MAX_AI_STUDIO_ATTEMPTS = 6;
 const RETRY_BASE_DELAY_MS = 200;
 const RETRY_MAX_DELAY_MS = 1600;
 const TRANSIENT_STATUS_CODES = new Set([500, 502, 503, 504]);
+const OPENROUTER_REQUEST_TIMEOUT_MS = 45000;
 
 const parseErrorMessage = (payload: any, status: number, provider: GeminiProvider): string => {
   if (typeof payload?.error?.message === "string" && payload.error.message.trim()) {
     return `Gemini (${provider}) request failed with status ${status}: ${payload.error.message.trim()}`;
   }
   return `Gemini (${provider}) request failed with status ${status}.`;
+};
+
+const parseOpenRouterErrorMessage = (payload: any, status: number): string => {
+  const payloadMessage =
+    payload?.error?.message ||
+    payload?.error?.metadata?.raw ||
+    payload?.message;
+  if (typeof payloadMessage === "string" && payloadMessage.trim()) {
+    return `OpenRouter request failed with status ${status}: ${payloadMessage.trim()}`;
+  }
+  return `OpenRouter request failed with status ${status}.`;
 };
 
 const isLocationUnsupportedError = (message: string): boolean => {
@@ -386,4 +413,90 @@ export const callGeminiJson = async (params: {
   }
 
   throw new Error(providerErrors.join(" | ") || "Unknown Gemini request failure.");
+};
+
+type OpenRouterMessageContent =
+  | string
+  | Array<
+      | { type: "text"; text: string }
+      | { type: "image_url"; image_url: { url: string } }
+    >;
+
+export const callOpenRouterJson = async (params: {
+  apiKey: string;
+  model: string;
+  messageContent: OpenRouterMessageContent;
+  requestId?: string;
+  referer?: string;
+  appTitle?: string;
+}): Promise<any> => {
+  const { apiKey, model, messageContent, requestId, referer, appTitle } = params;
+
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${apiKey}`,
+    "content-type": "application/json",
+  };
+  if (typeof referer === "string" && referer.trim()) {
+    headers["HTTP-Referer"] = referer.trim();
+  }
+  if (typeof appTitle === "string" && appTitle.trim()) {
+    headers["X-Title"] = appTitle.trim();
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort("timeout"), OPENROUTER_REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(OPENROUTER_API_BASE, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model,
+        temperature: 0.2,
+        max_tokens: 8192,
+        messages: [
+          {
+            role: "user",
+            content: messageContent,
+          },
+        ],
+      }),
+      signal: controller.signal,
+    });
+
+    let payload: any = null;
+    try {
+      payload = await response.json();
+    } catch {
+      // Keep null payload; handled below.
+    }
+
+    if (!response.ok) {
+      throw new Error(parseOpenRouterErrorMessage(payload, response.status));
+    }
+
+    const text = parseOpenRouterText(payload);
+    if (!text) {
+      throw new Error("OpenRouter returned an empty response.");
+    }
+
+    try {
+      return JSON.parse(stripJsonFence(text));
+    } catch {
+      throw new Error("OpenRouter returned invalid JSON.");
+    }
+  } catch (error: any) {
+    const message = String(error?.message || "Unknown OpenRouter request failure.");
+    console.log(
+      JSON.stringify({
+        event: "openrouter_request_failure",
+        requestId,
+        model,
+        message,
+      }),
+    );
+    throw new Error(message);
+  } finally {
+    clearTimeout(timeout);
+  }
 };

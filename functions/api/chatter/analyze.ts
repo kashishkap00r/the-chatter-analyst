@@ -1,5 +1,6 @@
 import {
   callGeminiJson,
+  callOpenRouterJson,
   CHATTER_PROMPT,
   CHATTER_RESPONSE_SCHEMA,
   normalizeGeminiProviderPreference,
@@ -9,12 +10,17 @@ interface Env {
   GEMINI_API_KEY?: string;
   VERTEX_API_KEY?: string;
   GEMINI_PROVIDER?: string;
+  OPENROUTER_API_KEY?: string;
+  OPENROUTER_MODEL?: string;
+  OPENROUTER_SITE_URL?: string;
+  OPENROUTER_APP_TITLE?: string;
 }
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_TRANSCRIPT_CHARS = 800000;
 const FLASH_MODEL = "gemini-2.5-flash";
 const PRO_MODEL = "gemini-3-pro-preview";
+const OPENROUTER_DEFAULT_MODEL = "openrouter/free";
 const DEFAULT_MODEL = FLASH_MODEL;
 const ALLOWED_MODELS = new Set([FLASH_MODEL, PRO_MODEL]);
 const REQUIRED_QUOTES_COUNT = 20;
@@ -224,6 +230,7 @@ export async function onRequestPost(context: any): Promise<Response> {
   }
 
   const model = typeof body?.model === "string" ? body.model : DEFAULT_MODEL;
+  const enableOpenRouterFallback = body?.enableOpenRouterFallback === true;
   if (!ALLOWED_MODELS.has(model)) {
     return error(400, "BAD_REQUEST", "Field 'model' is invalid.", "INVALID_MODEL");
   }
@@ -328,6 +335,88 @@ export async function onRequestPost(context: any): Promise<Response> {
         continue;
       }
 
+      let openRouterFallbackError: string | undefined;
+      const canAttemptOpenRouterFallback =
+        enableOpenRouterFallback &&
+        Boolean(env.OPENROUTER_API_KEY) &&
+        (schemaConstraint ||
+          upstreamRateLimit ||
+          transientUpstream ||
+          isOverloadError(message) ||
+          isTimeoutError(message) ||
+          isLocationUnsupportedError(message));
+
+      if (canAttemptOpenRouterFallback) {
+        const openRouterModel =
+          typeof env.OPENROUTER_MODEL === "string" && env.OPENROUTER_MODEL.trim()
+            ? env.OPENROUTER_MODEL.trim()
+            : OPENROUTER_DEFAULT_MODEL;
+
+        try {
+          console.log(
+            JSON.stringify({
+              event: "chatter_openrouter_fallback_start",
+              requestId,
+              model: attemptModel,
+              openRouterModel,
+            }),
+          );
+
+          const fallbackResult = await callOpenRouterJson({
+            apiKey: env.OPENROUTER_API_KEY as string,
+            model: openRouterModel,
+            requestId,
+            referer: env.OPENROUTER_SITE_URL,
+            appTitle: env.OPENROUTER_APP_TITLE || "The Chatter Analyst",
+            messageContent:
+              `${inputText}\n\n` +
+              "FINAL OUTPUT REQUIREMENT: Return only one valid JSON object. No markdown, no explanation.",
+          });
+
+          const fallbackValidationError = validateChatterResult(fallbackResult);
+          if (fallbackValidationError) {
+            openRouterFallbackError = `OpenRouter validation failed: ${fallbackValidationError}`;
+            console.log(
+              JSON.stringify({
+                event: "chatter_openrouter_fallback_validation_failed",
+                requestId,
+                model: attemptModel,
+                openRouterModel,
+                fallbackValidationError,
+              }),
+            );
+          } else {
+            console.log(
+              JSON.stringify({
+                event: "chatter_openrouter_fallback_success",
+                requestId,
+                model: attemptModel,
+                openRouterModel,
+              }),
+            );
+            return json(fallbackResult);
+          }
+        } catch (openRouterError: any) {
+          openRouterFallbackError = String(openRouterError?.message || "OpenRouter fallback failed.");
+          console.log(
+            JSON.stringify({
+              event: "chatter_openrouter_fallback_failed",
+              requestId,
+              model: attemptModel,
+              openRouterModel,
+              openRouterFallbackError,
+            }),
+          );
+        }
+      }
+
+      const details = {
+        requestId,
+        model: attemptModel,
+        openRouterFallbackEnabled: enableOpenRouterFallback,
+        ...(openRouterFallbackError ? { openRouterFallbackError } : {}),
+      };
+
       if (upstreamRateLimit) {
         const retryAfterSeconds = extractRetryAfterSeconds(message);
         return error(
@@ -337,7 +426,7 @@ export async function onRequestPost(context: any): Promise<Response> {
             ? `Gemini quota/rate limit reached. Retry in about ${retryAfterSeconds}s.`
             : "Gemini quota/rate limit reached. Please retry shortly.",
           "UPSTREAM_RATE_LIMIT",
-          { requestId, model: attemptModel },
+          details,
         );
       }
 
@@ -347,7 +436,7 @@ export async function onRequestPost(context: any): Promise<Response> {
           "UPSTREAM_ERROR",
           "Model could not satisfy strict structured output requirements.",
           "MODEL_SCHEMA_INCOMPATIBLE",
-          { requestId, model: attemptModel },
+          details,
         );
       }
 
@@ -357,7 +446,7 @@ export async function onRequestPost(context: any): Promise<Response> {
           "UPSTREAM_ERROR",
           "Upstream model is temporarily overloaded. Please retry.",
           "UPSTREAM_OVERLOAD",
-          { requestId, model: attemptModel },
+          details,
         );
       }
 
@@ -367,7 +456,7 @@ export async function onRequestPost(context: any): Promise<Response> {
           "UPSTREAM_ERROR",
           "Upstream request timed out. Please retry.",
           "UPSTREAM_TIMEOUT",
-          { requestId, model: attemptModel },
+          details,
         );
       }
 
@@ -377,7 +466,7 @@ export async function onRequestPost(context: any): Promise<Response> {
           "UPSTREAM_ERROR",
           "Gemini request was temporarily blocked by provider location policy. Please retry.",
           "UPSTREAM_LOCATION_UNSUPPORTED",
-          { requestId, model: attemptModel },
+          details,
         );
       }
 
@@ -387,7 +476,7 @@ export async function onRequestPost(context: any): Promise<Response> {
           "UPSTREAM_ERROR",
           "Upstream model request failed transiently. Please retry.",
           "UPSTREAM_TRANSIENT",
-          { requestId, model: attemptModel },
+          details,
         );
       }
 
@@ -396,7 +485,7 @@ export async function onRequestPost(context: any): Promise<Response> {
         "UPSTREAM_ERROR",
         `Transcript analysis failed: ${message}`,
         "UPSTREAM_FAILURE",
-        { requestId, model: attemptModel },
+        details,
       );
     }
   }

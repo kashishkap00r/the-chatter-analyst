@@ -31,9 +31,14 @@ Commands:
    - `GEMINI_API_KEY`
    - Optional provider mode: `GEMINI_PROVIDER` (`ai_studio` default, or `vertex_express`)
    - If `GEMINI_PROVIDER=vertex_express`, also set `VERTEX_API_KEY`
+   - Optional OpenRouter backup: `OPENROUTER_API_KEY`
+   - Optional OpenRouter model override: `OPENROUTER_MODEL` (default `openrouter/free`)
 
 If AI Studio intermittently returns `User location is not supported for the API use.`,
 the backend applies bounded retries with jitter automatically before failing.
+
+In the app header, enable `OpenRouter Backup` toggle to allow fallback to OpenRouter
+after Gemini retries are exhausted.
 
 Health check endpoint:
 - `POST /api/health/gemini`

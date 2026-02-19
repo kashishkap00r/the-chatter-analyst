@@ -229,6 +229,7 @@ const App: React.FC = () => {
   const [textInput, setTextInput] = useState('');
   const [model, setModel] = useState<ModelType>(ModelType.FLASH);
   const [pointsModel, setPointsModel] = useState<ModelType>(ModelType.FLASH);
+  const [enableOpenRouterFallback, setEnableOpenRouterFallback] = useState(false);
 
   const [batchFiles, setBatchFiles] = useState<BatchFile[]>([]);
   const [isAnalyzingBatch, setIsAnalyzingBatch] = useState(false);
@@ -270,13 +271,14 @@ const App: React.FC = () => {
     async (
       transcript: string,
       modelId: ModelType,
+      useOpenRouterFallback: boolean,
       onProgress: (progress: ProgressEvent) => void,
       onRetryNotice: (message: string) => void,
     ): Promise<ChatterAnalysisResult> => {
       let lastError: any = null;
       for (let attempt = 0; attempt <= CHATTER_MAX_RETRIES; attempt++) {
         try {
-          return await analyzeTranscript(transcript, modelId, onProgress);
+          return await analyzeTranscript(transcript, modelId, useOpenRouterFallback, onProgress);
         } catch (error: any) {
           lastError = error;
           const errorMessage = String(error?.message || 'Analysis failed.');
@@ -317,6 +319,7 @@ const App: React.FC = () => {
       const result = await runTranscriptWithRetry(
         textInput,
         model,
+        enableOpenRouterFallback,
         (progress) => {
           setChatterSingleState((prev) => ({
             ...prev,
@@ -349,7 +352,7 @@ const App: React.FC = () => {
         progress: { stage: 'error', message: 'Analysis failed.', percent: 100 },
       });
     }
-  }, [model, runTranscriptWithRetry, textInput]);
+  }, [enableOpenRouterFallback, model, runTranscriptWithRetry, textInput]);
 
   const handleAnalyzeBatch = useCallback(async () => {
     const pendingIndexes = batchFiles
@@ -400,6 +403,7 @@ const App: React.FC = () => {
         const result = await runTranscriptWithRetry(
           nextFiles[fileIndex].content,
           model,
+          enableOpenRouterFallback,
           (progress) => {
             nextFiles[fileIndex] = {
               ...nextFiles[fileIndex],
@@ -495,7 +499,7 @@ const App: React.FC = () => {
     }
 
     setIsAnalyzingBatch(false);
-  }, [batchFiles, model, runTranscriptWithRetry]);
+  }, [batchFiles, enableOpenRouterFallback, model, runTranscriptWithRetry]);
 
   const handleChatterFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -691,6 +695,7 @@ const App: React.FC = () => {
                 (message) => onChunkProgress(message),
                 range.startPage - 1,
                 pointsModel,
+                enableOpenRouterFallback,
               );
               chunkResults.push(chunkResult);
               chunkSucceeded = true;
@@ -803,7 +808,7 @@ const App: React.FC = () => {
     }
 
     setIsAnalyzingPointsBatch(false);
-  }, [pointsBatchFiles, pointsModel]);
+  }, [enableOpenRouterFallback, pointsBatchFiles, pointsModel]);
 
   const handleCopyAllChatter = useCallback(async () => {
     const completedResults = getCompletedChatterResults();
@@ -1377,24 +1382,36 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              <label className="text-sm font-semibold text-stone">
-                Model
-                <select
-                  value={appMode === 'chatter' ? model : pointsModel}
-                  onChange={(event) => {
-                    const selectedModel = event.target.value as ModelType;
-                    if (appMode === 'chatter') {
-                      setModel(selectedModel);
-                    } else {
-                      setPointsModel(selectedModel);
-                    }
-                  }}
-                  className="ml-2 rounded-lg border border-line bg-white px-3 py-1.5 text-sm text-ink"
-                >
-                  <option value={ModelType.FLASH}>Gemini 2.5 Flash (Fast)</option>
-                  <option value={ModelType.PRO}>Gemini 3 Pro (Deep)</option>
-                </select>
-              </label>
+              <div className="flex flex-wrap items-center justify-end gap-3">
+                <label className="text-sm font-semibold text-stone">
+                  Model
+                  <select
+                    value={appMode === 'chatter' ? model : pointsModel}
+                    onChange={(event) => {
+                      const selectedModel = event.target.value as ModelType;
+                      if (appMode === 'chatter') {
+                        setModel(selectedModel);
+                      } else {
+                        setPointsModel(selectedModel);
+                      }
+                    }}
+                    className="ml-2 rounded-lg border border-line bg-white px-3 py-1.5 text-sm text-ink"
+                  >
+                    <option value={ModelType.FLASH}>Gemini 2.5 Flash (Fast)</option>
+                    <option value={ModelType.PRO}>Gemini 3 Pro (Deep)</option>
+                  </select>
+                </label>
+
+                <label className="inline-flex items-center gap-2 text-sm font-semibold text-stone">
+                  <input
+                    type="checkbox"
+                    checked={enableOpenRouterFallback}
+                    onChange={(event) => setEnableOpenRouterFallback(event.target.checked)}
+                    className="h-4 w-4 rounded border-line text-brand focus:ring-brand/30"
+                  />
+                  OpenRouter Backup
+                </label>
+              </div>
             </div>
 
             <div className="inline-flex rounded-xl border border-line bg-white p-1 max-w-xl w-full">

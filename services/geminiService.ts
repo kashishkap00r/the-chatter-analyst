@@ -236,6 +236,7 @@ export const convertPdfToImages = async (
 export const analyzeTranscript = async (
   transcript: string,
   modelId: ModelType = ModelType.FLASH,
+  enableOpenRouterFallback = false,
   onProgress?: (event: ProgressEvent) => void,
 ): Promise<ChatterAnalysisResult> => {
   if (!transcript.trim()) {
@@ -257,6 +258,7 @@ export const analyzeTranscript = async (
     const result = await postJson<ChatterAnalysisResult>(CHATTER_ANALYZE_ENDPOINT, {
       transcript,
       model: modelId,
+      enableOpenRouterFallback,
     });
 
     onProgress?.({ stage: "complete", message: "Insights ready.", percent: 100 });
@@ -278,6 +280,7 @@ export const analyzePresentation = async (
   onProgress: (msg: string) => void,
   pageOffset = 0,
   modelId: ModelType = ModelType.FLASH,
+  enableOpenRouterFallback = false,
 ): Promise<PointsAndFiguresResult> => {
   if (!Array.isArray(pageImages) || pageImages.length === 0) {
     throw new Error("No presentation pages found to analyze.");
@@ -287,6 +290,7 @@ export const analyzePresentation = async (
   const result = await postJson<PointsAnalyzeApiResult>(POINTS_ANALYZE_ENDPOINT, {
     pageImages,
     model: modelId,
+    enableOpenRouterFallback,
   });
 
   if (!result.slides || result.slides.length === 0) {
