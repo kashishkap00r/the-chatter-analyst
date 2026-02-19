@@ -156,10 +156,11 @@ const extractBase64 = (dataUri: string): string => {
 export async function onRequestPost(context: any): Promise<Response> {
   const request = context.request as Request;
   const env = context.env as Env;
-  const primaryApiKey = env?.GEMINI_API_KEY || env?.VERTEX_API_KEY;
+  const primaryApiKey = env?.GEMINI_API_KEY;
+  const requestId = request.headers.get("cf-ray") || crypto.randomUUID();
 
   if (!primaryApiKey) {
-    return error(500, "INTERNAL", "Server is missing GEMINI_API_KEY / VERTEX_API_KEY.", "MISSING_GEMINI_KEY");
+    return error(500, "INTERNAL", "Server is missing GEMINI_API_KEY.", "MISSING_GEMINI_KEY");
   }
 
   const contentLength = Number(request.headers.get("content-length") || "0");
@@ -205,11 +206,23 @@ export async function onRequestPost(context: any): Promise<Response> {
     },
   }));
 
+  console.log(
+    JSON.stringify({
+      event: "points_request_start",
+      requestId,
+      requestedModel: model,
+      providerPreference,
+      pageCount: pageImages.length,
+      totalImageChars,
+    }),
+  );
+
   try {
     const result = await callGeminiJson({
       apiKey: primaryApiKey,
       vertexApiKey: env.VERTEX_API_KEY,
       providerPreference,
+      requestId,
       model,
       contents: [
         {
@@ -221,18 +234,44 @@ export async function onRequestPost(context: any): Promise<Response> {
 
     const validationError = validatePointsResult(result, pageImages.length);
     if (validationError) {
+      console.log(
+        JSON.stringify({
+          event: "points_request_validation_failed",
+          requestId,
+          model,
+          validationError,
+        }),
+      );
       return error(
         VALIDATION_STATUS,
         "UPSTREAM_ERROR",
         "Presentation analysis failed validation.",
         "VALIDATION_FAILED",
-        validationError,
+        { requestId, validationError },
       );
     }
+
+    console.log(
+      JSON.stringify({
+        event: "points_request_success",
+        requestId,
+        model,
+        slides: Array.isArray(result?.slides) ? result.slides.length : null,
+      }),
+    );
 
     return json(result);
   } catch (err: any) {
     const message = String(err?.message || "Unknown error");
+
+    console.log(
+      JSON.stringify({
+        event: "points_request_failure",
+        requestId,
+        model,
+        message,
+      }),
+    );
 
     if (isUpstreamRateLimit(message)) {
       const retryAfterSeconds = extractRetryAfterSeconds(message);
@@ -243,11 +282,18 @@ export async function onRequestPost(context: any): Promise<Response> {
           ? `Gemini quota/rate limit reached. Retry in about ${retryAfterSeconds}s.`
           : "Gemini quota/rate limit reached. Please retry shortly.",
         "UPSTREAM_RATE_LIMIT",
+        { requestId, model },
       );
     }
 
     if (message.includes("503") || message.toLowerCase().includes("overload")) {
-      return error(UPSTREAM_DEPENDENCY_STATUS, "UPSTREAM_ERROR", "Gemini is temporarily overloaded. Please retry.", "UPSTREAM_OVERLOAD");
+      return error(
+        UPSTREAM_DEPENDENCY_STATUS,
+        "UPSTREAM_ERROR",
+        "Gemini is temporarily overloaded. Please retry.",
+        "UPSTREAM_OVERLOAD",
+        { requestId, model },
+      );
     }
 
     if (message.toLowerCase().includes("unable to process input image")) {
@@ -256,26 +302,46 @@ export async function onRequestPost(context: any): Promise<Response> {
         "UPSTREAM_ERROR",
         "Gemini could not process one or more slide images for this chunk. Retrying may work.",
         "UPSTREAM_IMAGE_PROCESSING",
+        { requestId, model },
       );
     }
 
     if (message.toLowerCase().includes("timed out") || message.toLowerCase().includes("timeout")) {
-      return error(UPSTREAM_DEPENDENCY_STATUS, "UPSTREAM_ERROR", "Upstream request timed out. Please retry.", "UPSTREAM_TIMEOUT");
+      return error(
+        UPSTREAM_DEPENDENCY_STATUS,
+        "UPSTREAM_ERROR",
+        "Upstream request timed out. Please retry.",
+        "UPSTREAM_TIMEOUT",
+        { requestId, model },
+      );
     }
 
     if (isLocationUnsupportedError(message)) {
       return error(
         UPSTREAM_DEPENDENCY_STATUS,
         "UPSTREAM_ERROR",
-        "Gemini request blocked by provider location policy. Configure VERTEX_API_KEY and keep GEMINI_PROVIDER=auto (or set GEMINI_PROVIDER=vertex_express).",
+        "Gemini request was temporarily blocked by provider location policy. Please retry.",
         "UPSTREAM_LOCATION_UNSUPPORTED",
+        { requestId, model },
       );
     }
 
     if (message.includes("500") || message.includes("502") || message.includes("504")) {
-      return error(UPSTREAM_DEPENDENCY_STATUS, "UPSTREAM_ERROR", "Gemini request failed upstream. Please retry.", "UPSTREAM_TRANSIENT");
+      return error(
+        UPSTREAM_DEPENDENCY_STATUS,
+        "UPSTREAM_ERROR",
+        "Gemini request failed upstream. Please retry.",
+        "UPSTREAM_TRANSIENT",
+        { requestId, model },
+      );
     }
 
-    return error(UPSTREAM_DEPENDENCY_STATUS, "UPSTREAM_ERROR", `Presentation analysis failed: ${message}`, "UPSTREAM_FAILURE");
+    return error(
+      UPSTREAM_DEPENDENCY_STATUS,
+      "UPSTREAM_ERROR",
+      `Presentation analysis failed: ${message}`,
+      "UPSTREAM_FAILURE",
+      { requestId, model },
+    );
   }
 }

@@ -2,7 +2,7 @@ const AI_STUDIO_API_BASE = "https://generativelanguage.googleapis.com/v1beta/mod
 const VERTEX_EXPRESS_API_BASE = "https://aiplatform.googleapis.com/v1beta1/publishers/google/models";
 
 export type GeminiProvider = "ai_studio" | "vertex_express";
-export type GeminiProviderPreference = GeminiProvider | "auto";
+export type GeminiProviderPreference = GeminiProvider;
 
 export const SAFETY_SETTINGS = [
   { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
@@ -183,7 +183,11 @@ const stripJsonFence = (text: string): string =>
     .replace(/```\s*/g, "")
     .trim();
 
-const MAX_LOCATION_RETRY_ATTEMPTS = 3;
+const REQUEST_TIMEOUT_MS = 30000;
+const MAX_AI_STUDIO_ATTEMPTS = 4;
+const RETRY_BASE_DELAY_MS = 200;
+const RETRY_MAX_DELAY_MS = 1600;
+const TRANSIENT_STATUS_CODES = new Set([500, 502, 503, 504]);
 
 const parseErrorMessage = (payload: any, status: number, provider: GeminiProvider): string => {
   if (typeof payload?.error?.message === "string" && payload.error.message.trim()) {
@@ -200,19 +204,49 @@ const isLocationUnsupportedError = (message: string): boolean => {
   );
 };
 
+const isTimeoutOrNetworkError = (message: string): boolean => {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("timeout") ||
+    normalized.includes("timed out") ||
+    normalized.includes("abort") ||
+    normalized.includes("network") ||
+    normalized.includes("fetch failed")
+  );
+};
+
+const isRetryableAiStudioFailure = (status: number | null, message: string): boolean => {
+  if (isLocationUnsupportedError(message)) {
+    return true;
+  }
+  if (typeof status === "number" && TRANSIENT_STATUS_CODES.has(status)) {
+    return true;
+  }
+  return isTimeoutOrNetworkError(message);
+};
+
+const sleep = async (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+const computeRetryDelayMs = (attempt: number): number => {
+  const exponential = Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * (2 ** (attempt - 1)));
+  const jitter = Math.floor(Math.random() * Math.max(50, Math.floor(exponential / 3)));
+  return exponential + jitter;
+};
+
 export const normalizeGeminiProviderPreference = (value: unknown): GeminiProviderPreference => {
   if (typeof value !== "string") return "ai_studio";
   const normalized = value.trim().toLowerCase();
-  if (normalized === "auto") return "auto";
   if (normalized === "ai_studio") return "ai_studio";
   if (normalized === "vertex_express") return "vertex_express";
   return "ai_studio";
 };
 
-const resolveProviderOrder = (preference: GeminiProviderPreference, hasVertexFallback: boolean): GeminiProvider[] => {
+const resolveProviderOrder = (preference: GeminiProviderPreference): GeminiProvider[] => {
   if (preference === "ai_studio") return ["ai_studio"];
-  if (preference === "vertex_express") return ["vertex_express"];
-  return hasVertexFallback ? ["ai_studio", "vertex_express"] : ["ai_studio"];
+  return ["vertex_express"];
 };
 
 const endpointForProvider = (provider: GeminiProvider, model: string, apiKey: string): string => {
@@ -227,21 +261,32 @@ export const callGeminiJson = async (params: {
   contents: unknown;
   responseSchema: unknown;
   providerPreference?: GeminiProviderPreference;
+  requestId?: string;
 }): Promise<any> => {
-  const { apiKey, vertexApiKey, model, contents, responseSchema } = params;
+  const { apiKey, vertexApiKey, model, contents, responseSchema, requestId } = params;
   const providerPreference = normalizeGeminiProviderPreference(params.providerPreference);
-  const hasVertexFallback = typeof vertexApiKey === "string" && vertexApiKey.trim().length > 0;
-  const providers = resolveProviderOrder(providerPreference, hasVertexFallback);
+  const providers = resolveProviderOrder(providerPreference);
   const providerErrors: string[] = [];
 
   for (let index = 0; index < providers.length; index++) {
     const provider = providers[index];
-    const keyForProvider = provider === "vertex_express" ? vertexApiKey?.trim() || apiKey : apiKey;
-    const isLastProvider = index === providers.length - 1;
-    const maxAttempts = provider === "ai_studio" ? MAX_LOCATION_RETRY_ATTEMPTS : 1;
+    const keyForProvider = provider === "vertex_express" ? vertexApiKey?.trim() : apiKey;
+    const maxAttempts = provider === "ai_studio" ? MAX_AI_STUDIO_ATTEMPTS : 1;
+
+    if (!keyForProvider) {
+      const missingKeyMessage =
+        provider === "vertex_express"
+          ? "Gemini (vertex_express) request failed: VERTEX_API_KEY is missing."
+          : "Gemini (ai_studio) request failed: GEMINI_API_KEY is missing.";
+      providerErrors.push(missingKeyMessage);
+      throw new Error(providerErrors.join(" | "));
+    }
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const endpoint = endpointForProvider(provider, model, keyForProvider);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort("timeout"), REQUEST_TIMEOUT_MS);
+      let status: number | null = null;
 
       try {
         const response = await fetch(endpoint, {
@@ -257,7 +302,9 @@ export const callGeminiJson = async (params: {
               responseSchema,
             },
           }),
+          signal: controller.signal,
         });
+        status = response.status;
 
         let payload: any = null;
         try {
@@ -272,16 +319,24 @@ export const callGeminiJson = async (params: {
             providerErrors.push(message);
           }
 
-          const shouldRetryLocationFailure =
-            provider === "ai_studio" && attempt < maxAttempts && isLocationUnsupportedError(message);
-          if (shouldRetryLocationFailure) {
+          const shouldRetry = provider === "ai_studio" && attempt < maxAttempts && isRetryableAiStudioFailure(response.status, message);
+          if (shouldRetry) {
+            const waitMs = computeRetryDelayMs(attempt);
+            console.log(
+              JSON.stringify({
+                event: "gemini_retry",
+                requestId,
+                provider,
+                model,
+                attempt,
+                maxAttempts,
+                reason: "http_error",
+                status: response.status,
+                waitMs,
+              }),
+            );
+            await sleep(waitMs);
             continue;
-          }
-
-          const shouldFallbackToVertex =
-            !isLastProvider && provider === "ai_studio" && providers[index + 1] === "vertex_express" && isLocationUnsupportedError(message);
-          if (shouldFallbackToVertex) {
-            break;
           }
 
           throw new Error(providerErrors.join(" | "));
@@ -303,19 +358,29 @@ export const callGeminiJson = async (params: {
           providerErrors.push(message);
         }
 
-        const shouldRetryLocationFailure =
-          provider === "ai_studio" && attempt < maxAttempts && isLocationUnsupportedError(message);
-        if (shouldRetryLocationFailure) {
+        const shouldRetry = provider === "ai_studio" && attempt < maxAttempts && isRetryableAiStudioFailure(status, message);
+        if (shouldRetry) {
+          const waitMs = computeRetryDelayMs(attempt);
+          console.log(
+            JSON.stringify({
+              event: "gemini_retry",
+              requestId,
+              provider,
+              model,
+              attempt,
+              maxAttempts,
+              reason: "network_or_timeout",
+              status,
+              waitMs,
+            }),
+          );
+          await sleep(waitMs);
           continue;
         }
 
-        const shouldFallbackToVertex =
-          !isLastProvider && provider === "ai_studio" && providers[index + 1] === "vertex_express" && isLocationUnsupportedError(message);
-        if (shouldFallbackToVertex) {
-          break;
-        }
-
         throw new Error(providerErrors.join(" | "));
+      } finally {
+        clearTimeout(timeout);
       }
     }
   }

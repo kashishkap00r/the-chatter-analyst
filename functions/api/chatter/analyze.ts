@@ -199,10 +199,11 @@ const validateChatterResult = (result: any): string | null => {
 export async function onRequestPost(context: any): Promise<Response> {
   const request = context.request as Request;
   const env = context.env as Env;
-  const primaryApiKey = env?.GEMINI_API_KEY || env?.VERTEX_API_KEY;
+  const primaryApiKey = env?.GEMINI_API_KEY;
+  const requestId = request.headers.get("cf-ray") || crypto.randomUUID();
 
   if (!primaryApiKey) {
-    return error(500, "INTERNAL", "Server is missing GEMINI_API_KEY / VERTEX_API_KEY.", "MISSING_GEMINI_KEY");
+    return error(500, "INTERNAL", "Server is missing GEMINI_API_KEY.", "MISSING_GEMINI_KEY");
   }
 
   const contentLength = Number(request.headers.get("content-length") || "0");
@@ -231,6 +232,16 @@ export async function onRequestPost(context: any): Promise<Response> {
   const providerPreference = normalizeGeminiProviderPreference(env?.GEMINI_PROVIDER);
   const inputText = `${CHATTER_PROMPT}\n\nINPUT TRANSCRIPT:\n${transcript.substring(0, MAX_TRANSCRIPT_CHARS)}`;
 
+  console.log(
+    JSON.stringify({
+      event: "chatter_request_start",
+      requestId,
+      requestedModel: model,
+      providerPreference,
+      transcriptChars: transcript.length,
+    }),
+  );
+
   let lastMessage = "Unknown error";
   for (let attemptIndex = 0; attemptIndex < modelAttemptOrder.length; attemptIndex++) {
     const attemptModel = modelAttemptOrder[attemptIndex];
@@ -241,6 +252,7 @@ export async function onRequestPost(context: any): Promise<Response> {
         apiKey: primaryApiKey,
         vertexApiKey: env.VERTEX_API_KEY,
         providerPreference,
+        requestId,
         model: attemptModel,
         contents: [
           {
@@ -252,19 +264,38 @@ export async function onRequestPost(context: any): Promise<Response> {
 
       const validationError = validateChatterResult(result);
       if (validationError) {
+        console.log(
+          JSON.stringify({
+            event: "chatter_request_validation_failed",
+            requestId,
+            model: attemptModel,
+            validationError,
+          }),
+        );
         return error(
           VALIDATION_STATUS,
           "UPSTREAM_ERROR",
           "Transcript analysis failed validation.",
           "VALIDATION_FAILED",
-          { validationError, model: attemptModel },
+          { requestId, validationError, model: attemptModel },
         );
       }
+
+      console.log(
+        JSON.stringify({
+          event: "chatter_request_success",
+          requestId,
+          requestedModel: model,
+          resolvedModel: attemptModel,
+          quotes: Array.isArray(result?.quotes) ? result.quotes.length : null,
+        }),
+      );
 
       if (attemptModel !== model) {
         console.log(
           JSON.stringify({
             event: "chatter_model_fallback_success",
+            requestId,
             requestedModel: model,
             resolvedModel: attemptModel,
           }),
@@ -284,6 +315,7 @@ export async function onRequestPost(context: any): Promise<Response> {
       console.log(
         JSON.stringify({
           event: "chatter_model_attempt_failure",
+          requestId,
           model: attemptModel,
           hasFallback,
           schemaConstraint,
@@ -305,6 +337,7 @@ export async function onRequestPost(context: any): Promise<Response> {
             ? `Gemini quota/rate limit reached. Retry in about ${retryAfterSeconds}s.`
             : "Gemini quota/rate limit reached. Please retry shortly.",
           "UPSTREAM_RATE_LIMIT",
+          { requestId, model: attemptModel },
         );
       }
 
@@ -314,7 +347,7 @@ export async function onRequestPost(context: any): Promise<Response> {
           "UPSTREAM_ERROR",
           "Model could not satisfy strict structured output requirements.",
           "MODEL_SCHEMA_INCOMPATIBLE",
-          { model: attemptModel },
+          { requestId, model: attemptModel },
         );
       }
 
@@ -324,7 +357,7 @@ export async function onRequestPost(context: any): Promise<Response> {
           "UPSTREAM_ERROR",
           "Upstream model is temporarily overloaded. Please retry.",
           "UPSTREAM_OVERLOAD",
-          { model: attemptModel },
+          { requestId, model: attemptModel },
         );
       }
 
@@ -334,7 +367,7 @@ export async function onRequestPost(context: any): Promise<Response> {
           "UPSTREAM_ERROR",
           "Upstream request timed out. Please retry.",
           "UPSTREAM_TIMEOUT",
-          { model: attemptModel },
+          { requestId, model: attemptModel },
         );
       }
 
@@ -342,9 +375,9 @@ export async function onRequestPost(context: any): Promise<Response> {
         return error(
           UPSTREAM_DEPENDENCY_STATUS,
           "UPSTREAM_ERROR",
-          "Gemini request blocked by provider location policy. Configure VERTEX_API_KEY and keep GEMINI_PROVIDER=auto (or set GEMINI_PROVIDER=vertex_express).",
+          "Gemini request was temporarily blocked by provider location policy. Please retry.",
           "UPSTREAM_LOCATION_UNSUPPORTED",
-          { model: attemptModel },
+          { requestId, model: attemptModel },
         );
       }
 
@@ -354,7 +387,7 @@ export async function onRequestPost(context: any): Promise<Response> {
           "UPSTREAM_ERROR",
           "Upstream model request failed transiently. Please retry.",
           "UPSTREAM_TRANSIENT",
-          { model: attemptModel },
+          { requestId, model: attemptModel },
         );
       }
 
@@ -363,10 +396,16 @@ export async function onRequestPost(context: any): Promise<Response> {
         "UPSTREAM_ERROR",
         `Transcript analysis failed: ${message}`,
         "UPSTREAM_FAILURE",
-        { model: attemptModel },
+        { requestId, model: attemptModel },
       );
     }
   }
 
-  return error(UPSTREAM_DEPENDENCY_STATUS, "UPSTREAM_ERROR", `Transcript analysis failed: ${lastMessage}`, "UPSTREAM_FAILURE");
+  return error(
+    UPSTREAM_DEPENDENCY_STATUS,
+    "UPSTREAM_ERROR",
+    `Transcript analysis failed: ${lastMessage}`,
+    "UPSTREAM_FAILURE",
+    { requestId },
+  );
 }

@@ -1,5 +1,5 @@
 import { normalizeGeminiProviderPreference } from "../../_shared/gemini";
-import type { GeminiProvider, GeminiProviderPreference } from "../../_shared/gemini";
+import type { GeminiProvider } from "../../_shared/gemini";
 
 interface Env {
   GEMINI_API_KEY?: string;
@@ -29,7 +29,6 @@ const AI_STUDIO_API_BASE = "https://generativelanguage.googleapis.com/v1beta/mod
 const VERTEX_EXPRESS_API_BASE = "https://aiplatform.googleapis.com/v1beta1/publishers/google/models";
 const MODELS = ["gemini-2.5-flash", "gemini-3-pro-preview"] as const;
 const REQUEST_TIMEOUT_MS = 15000;
-const MAX_LOCATION_RETRY_ATTEMPTS = 3;
 
 const json = (payload: unknown, status = 200): Response =>
   new Response(JSON.stringify(payload), {
@@ -39,6 +38,14 @@ const json = (payload: unknown, status = 200): Response =>
       "cache-control": "no-store",
     },
   });
+
+const providerBase = (provider: GeminiProvider): string =>
+  provider === "ai_studio" ? AI_STUDIO_API_BASE : VERTEX_EXPRESS_API_BASE;
+
+const resolveProvider = (value: unknown): GeminiProvider => {
+  const normalized = normalizeGeminiProviderPreference(value);
+  return normalized === "vertex_express" ? "vertex_express" : "ai_studio";
+};
 
 const isLocationUnsupported = (message: string): boolean => {
   const normalized = message.toLowerCase();
@@ -84,7 +91,7 @@ const classifyGeminiError = (status: number, message: string): HealthState => {
     return "overloaded";
   }
 
-  if (normalized.includes("timed out") || normalized.includes("timeout")) {
+  if (normalized.includes("timed out") || normalized.includes("timeout") || normalized.includes("abort")) {
     return "timeout";
   }
 
@@ -115,16 +122,8 @@ const parseGeminiMessage = async (response: Response): Promise<string> => {
   return `Gemini responded with status ${response.status}.`;
 };
 
-const resolveProviderOrder = (preference: GeminiProviderPreference, hasVertexFallback: boolean): GeminiProvider[] => {
-  if (preference === "ai_studio") return ["ai_studio"];
-  if (preference === "vertex_express") return ["vertex_express"];
-  return hasVertexFallback ? ["ai_studio", "vertex_express"] : ["ai_studio"];
-};
-
-const providerBase = (provider: GeminiProvider): string =>
-  provider === "ai_studio" ? AI_STUDIO_API_BASE : VERTEX_EXPRESS_API_BASE;
-
-const runSingleProbe = async (apiKey: string, model: string, provider: GeminiProvider): Promise<ModelHealth> => {
+const runModelProbe = async (params: { apiKey: string; model: string; provider: GeminiProvider }): Promise<ModelHealth> => {
+  const { apiKey, model, provider } = params;
   const endpoint = `${providerBase(provider)}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort("timeout"), REQUEST_TIMEOUT_MS);
@@ -173,9 +172,10 @@ const runSingleProbe = async (apiKey: string, model: string, provider: GeminiPro
     };
   } catch (error: any) {
     const message = String(error?.message || "Unknown request failure");
-    const normalized = message.toLowerCase();
-    const state: HealthState =
-      normalized.includes("abort") || normalized.includes("timeout") ? "timeout" : "upstream_error";
+    const state: HealthState = message.toLowerCase().includes("timeout") || message.toLowerCase().includes("abort")
+      ? "timeout"
+      : "upstream_error";
+
     return {
       model,
       provider,
@@ -185,62 +185,6 @@ const runSingleProbe = async (apiKey: string, model: string, provider: GeminiPro
   } finally {
     clearTimeout(timeout);
   }
-};
-
-const runModelProbe = async (params: {
-  model: string;
-  geminiApiKey?: string;
-  vertexApiKey?: string;
-  providerPreference: GeminiProviderPreference;
-}): Promise<ModelHealth> => {
-  const { model, geminiApiKey, vertexApiKey, providerPreference } = params;
-  const hasVertexFallback = typeof vertexApiKey === "string" && vertexApiKey.trim().length > 0;
-  const providers = resolveProviderOrder(providerPreference, hasVertexFallback);
-  let lastResult: ModelHealth | null = null;
-
-  for (let index = 0; index < providers.length; index++) {
-    const provider = providers[index];
-    const key = provider === "vertex_express" ? vertexApiKey : geminiApiKey;
-
-    if (!key) {
-      lastResult = {
-        model,
-        provider,
-        state: "missing_key",
-        message: provider === "vertex_express" ? "Missing VERTEX_API_KEY (or GEMINI_API_KEY fallback)." : "Missing GEMINI_API_KEY.",
-      };
-      continue;
-    }
-
-    const maxAttempts = provider === "ai_studio" ? MAX_LOCATION_RETRY_ATTEMPTS : 1;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const result = await runSingleProbe(key, model, provider);
-      lastResult = result;
-
-      const shouldRetryLocation =
-        provider === "ai_studio" && result.state === "location_unsupported" && attempt < maxAttempts;
-      if (shouldRetryLocation) {
-        continue;
-      }
-
-      const shouldTryFallback =
-        index < providers.length - 1 && result.provider === "ai_studio" && result.state === "location_unsupported";
-      if (shouldTryFallback) {
-        break;
-      }
-
-      return result;
-    }
-  }
-
-  return (
-    lastResult || {
-      model,
-      provider: "ai_studio",
-      state: "upstream_error",
-      message: "No provider attempt was executed.",
-    }
-  );
 };
 
 const evaluateOverallState = (results: ModelHealth[]): HealthState => {
@@ -265,36 +209,32 @@ const evaluateOverallState = (results: ModelHealth[]): HealthState => {
   return "upstream_error";
 };
 
+const missingKeyMessage = (provider: GeminiProvider): string =>
+  provider === "vertex_express"
+    ? "VERTEX_API_KEY is required when GEMINI_PROVIDER=vertex_express."
+    : "GEMINI_API_KEY is required for ai_studio provider.";
+
 const handleGeminiHealth = async (context: any): Promise<Response> => {
   const env = context.env as Env;
-  const geminiApiKey = env?.GEMINI_API_KEY;
-  const vertexApiKey = env?.VERTEX_API_KEY;
-  const providerPreference = normalizeGeminiProviderPreference(env?.GEMINI_PROVIDER);
+  const providerPreference = resolveProvider(env?.GEMINI_PROVIDER);
+  const apiKey = providerPreference === "vertex_express" ? env?.VERTEX_API_KEY : env?.GEMINI_API_KEY;
 
-  if (!geminiApiKey && !vertexApiKey) {
-    return json(
-      {
-        service: "gemini",
-        timestamp: new Date().toISOString(),
-        overallState: "missing_key",
-        keyConfigured: false,
-        message: "Set GEMINI_API_KEY and optionally VERTEX_API_KEY in Cloudflare Pages secrets.",
-        models: [],
-      },
-      200,
-    );
+  if (!apiKey) {
+    return json({
+      service: "gemini",
+      timestamp: new Date().toISOString(),
+      overallState: "missing_key",
+      keyConfigured: false,
+      keyState: "missing",
+      providerPreference,
+      message: missingKeyMessage(providerPreference),
+      models: [],
+    });
   }
 
   const modelResults: ModelHealth[] = [];
   for (const model of MODELS) {
-    modelResults.push(
-      await runModelProbe({
-        model,
-        geminiApiKey,
-        vertexApiKey,
-        providerPreference,
-      }),
-    );
+    modelResults.push(await runModelProbe({ apiKey, model, provider: providerPreference }));
   }
 
   const overallState = evaluateOverallState(modelResults);
@@ -302,13 +242,9 @@ const handleGeminiHealth = async (context: any): Promise<Response> => {
 
   let guidance: string;
   if (overallState === "ok") {
-    const usedVertex = modelResults.some((result) => result.provider === "vertex_express");
-    guidance = usedVertex
-      ? "Gemini is reachable via Vertex Express (fallback path active)."
-      : "Gemini key and model endpoints are reachable.";
+    guidance = "Gemini key and model endpoints are reachable.";
   } else if (overallState === "location_unsupported") {
-    guidance =
-      "AI Studio endpoint is blocked by location policy. Set VERTEX_API_KEY and keep GEMINI_PROVIDER=auto (or set GEMINI_PROVIDER=vertex_express).";
+    guidance = "Gemini is intermittently blocked by provider location policy. Retry should usually recover.";
   } else {
     guidance =
       "Check models[].state for root cause (invalid_key, rate_limited, overloaded, timeout, location_unsupported, or upstream_error).";
@@ -318,7 +254,7 @@ const handleGeminiHealth = async (context: any): Promise<Response> => {
     service: "gemini",
     timestamp: new Date().toISOString(),
     overallState,
-    keyConfigured: Boolean(geminiApiKey || vertexApiKey),
+    keyConfigured: true,
     keyState,
     providerPreference,
     models: modelResults,

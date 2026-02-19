@@ -29,15 +29,15 @@ Commands:
    - Build output directory: `dist`
 4. Set secret environment variable in Pages:
    - `GEMINI_API_KEY`
-   - Optional fallback key: `VERTEX_API_KEY`
-   - Optional provider mode: `GEMINI_PROVIDER` (`ai_studio`, `auto`, `vertex_express`; default `ai_studio`)
+   - Optional provider mode: `GEMINI_PROVIDER` (`ai_studio` default, or `vertex_express`)
+   - If `GEMINI_PROVIDER=vertex_express`, also set `VERTEX_API_KEY`
 
-If AI Studio returns `User location is not supported for the API use.`, set `GEMINI_PROVIDER=auto` and add
-`VERTEX_API_KEY` so backend requests can automatically fall back to Vertex Express.
+If AI Studio intermittently returns `User location is not supported for the API use.`,
+the backend applies bounded retries with jitter automatically before failing.
 
 Health check endpoint:
 - `POST /api/health/gemini`
-- reports provider/model reachability and whether fallback is active.
+- reports provider/model reachability for the currently configured provider.
 
 API routes are implemented in:
 - `functions/api/chatter/analyze.ts`
