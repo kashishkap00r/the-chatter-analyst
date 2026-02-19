@@ -6,9 +6,25 @@ interface Env {
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_TRANSCRIPT_CHARS = 800000;
-const DEFAULT_MODEL = "gemini-2.5-flash";
-const ALLOWED_MODELS = new Set(["gemini-2.5-flash", "gemini-3-pro-preview"]);
+const FLASH_MODEL = "gemini-2.5-flash";
+const PRO_MODEL = "gemini-3-pro-preview";
+const DEFAULT_MODEL = FLASH_MODEL;
+const ALLOWED_MODELS = new Set([FLASH_MODEL, PRO_MODEL]);
 const REQUIRED_QUOTES_COUNT = 20;
+const UPSTREAM_DEPENDENCY_STATUS = 424;
+const VALIDATION_STATUS = 422;
+const ALLOWED_CATEGORIES = new Set([
+  "Financial Guidance",
+  "Capital Allocation",
+  "Cost & Supply Chain",
+  "Tech & Disruption",
+  "Regulation & Policy",
+  "Macro & Geopolitics",
+  "ESG & Climate",
+  "Legal & Governance",
+  "Competitive Landscape",
+  "Other Material",
+]);
 
 const json = (payload: unknown, status = 200): Response =>
   new Response(JSON.stringify(payload), {
@@ -44,6 +60,36 @@ const isUpstreamRateLimit = (message: string): boolean => {
   );
 };
 
+const isSchemaConstraintError = (message: string): boolean => {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("too many states") ||
+    normalized.includes("specified schema produces a constraint")
+  );
+};
+
+const isOverloadError = (message: string): boolean => {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("503") ||
+    normalized.includes("overload") ||
+    normalized.includes("high demand") ||
+    normalized.includes("temporarily unavailable")
+  );
+};
+
+const isTimeoutError = (message: string): boolean => {
+  const normalized = message.toLowerCase();
+  return normalized.includes("timed out") || normalized.includes("timeout");
+};
+
+const isUpstreamTransientError = (message: string): boolean =>
+  isOverloadError(message) ||
+  isTimeoutError(message) ||
+  message.includes("500") ||
+  message.includes("502") ||
+  message.includes("504");
+
 const validateChatterResult = (result: any): string | null => {
   if (!result || typeof result !== "object") {
     return "Gemini response is not a JSON object.";
@@ -62,6 +108,12 @@ const validateChatterResult = (result: any): string | null => {
       return `Missing or invalid field '${field}'.`;
     }
   }
+
+  const normalizedScrip = result.nseScrip.trim().toUpperCase();
+  if (!/^[A-Z0-9]+$/.test(normalizedScrip)) {
+    return "Field 'nseScrip' must contain only A-Z and 0-9.";
+  }
+  result.nseScrip = normalizedScrip;
 
   if (!Array.isArray(result.quotes)) {
     return "Field 'quotes' must be an array.";
@@ -87,6 +139,11 @@ const validateChatterResult = (result: any): string | null => {
     if (!hasNonEmptyString(quoteItem.category)) {
       return `Quote #${quoteIndex} is missing 'category'.`;
     }
+    const normalizedCategory = quoteItem.category.trim();
+    if (!ALLOWED_CATEGORIES.has(normalizedCategory)) {
+      return `Quote #${quoteIndex} has invalid category '${quoteItem.category}'.`;
+    }
+    quoteItem.category = normalizedCategory;
     if (!quoteItem.speaker || typeof quoteItem.speaker !== "object") {
       return `Quote #${quoteIndex} is missing 'speaker'.`;
     }
@@ -131,63 +188,133 @@ export async function onRequestPost(context: any): Promise<Response> {
     return error(400, "BAD_REQUEST", "Field 'model' is invalid.", "INVALID_MODEL");
   }
 
-  try {
-    const result = await callGeminiJson({
-      apiKey: env.GEMINI_API_KEY,
-      model,
-      contents: [
-        {
-          parts: [
-            {
-              text: `${CHATTER_PROMPT}\n\nINPUT TRANSCRIPT:\n${transcript.substring(0, MAX_TRANSCRIPT_CHARS)}`,
-            },
-          ],
-        },
-      ],
-      responseSchema: CHATTER_RESPONSE_SCHEMA,
-    });
+  const modelAttemptOrder = model === FLASH_MODEL ? [FLASH_MODEL, PRO_MODEL] : [model];
+  const inputText = `${CHATTER_PROMPT}\n\nINPUT TRANSCRIPT:\n${transcript.substring(0, MAX_TRANSCRIPT_CHARS)}`;
 
-    const validationError = validateChatterResult(result);
-    if (validationError) {
+  let lastMessage = "Unknown error";
+  for (let attemptIndex = 0; attemptIndex < modelAttemptOrder.length; attemptIndex++) {
+    const attemptModel = modelAttemptOrder[attemptIndex];
+    const hasFallback = attemptIndex < modelAttemptOrder.length - 1;
+
+    try {
+      const result = await callGeminiJson({
+        apiKey: env.GEMINI_API_KEY,
+        model: attemptModel,
+        contents: [
+          {
+            parts: [{ text: inputText }],
+          },
+        ],
+        responseSchema: CHATTER_RESPONSE_SCHEMA,
+      });
+
+      const validationError = validateChatterResult(result);
+      if (validationError) {
+        return error(
+          VALIDATION_STATUS,
+          "UPSTREAM_ERROR",
+          "Transcript analysis failed validation.",
+          "VALIDATION_FAILED",
+          { validationError, model: attemptModel },
+        );
+      }
+
+      if (attemptModel !== model) {
+        console.log(
+          JSON.stringify({
+            event: "chatter_model_fallback_success",
+            requestedModel: model,
+            resolvedModel: attemptModel,
+          }),
+        );
+      }
+
+      return json(result);
+    } catch (err: any) {
+      const message = String(err?.message || "Unknown error");
+      lastMessage = message;
+
+      const schemaConstraint = isSchemaConstraintError(message);
+      const upstreamRateLimit = isUpstreamRateLimit(message);
+      const transientUpstream = isUpstreamTransientError(message);
+      const shouldFallback = hasFallback && (schemaConstraint || upstreamRateLimit || transientUpstream);
+
+      console.log(
+        JSON.stringify({
+          event: "chatter_model_attempt_failure",
+          model: attemptModel,
+          hasFallback,
+          schemaConstraint,
+          upstreamRateLimit,
+          transientUpstream,
+        }),
+      );
+
+      if (shouldFallback) {
+        continue;
+      }
+
+      if (upstreamRateLimit) {
+        const retryAfterSeconds = extractRetryAfterSeconds(message);
+        return error(
+          429,
+          "RATE_LIMIT",
+          retryAfterSeconds
+            ? `Gemini quota/rate limit reached. Retry in about ${retryAfterSeconds}s.`
+            : "Gemini quota/rate limit reached. Please retry shortly.",
+          "UPSTREAM_RATE_LIMIT",
+        );
+      }
+
+      if (schemaConstraint) {
+        return error(
+          VALIDATION_STATUS,
+          "UPSTREAM_ERROR",
+          "Model could not satisfy strict structured output requirements.",
+          "MODEL_SCHEMA_INCOMPATIBLE",
+          { model: attemptModel },
+        );
+      }
+
+      if (isOverloadError(message)) {
+        return error(
+          UPSTREAM_DEPENDENCY_STATUS,
+          "UPSTREAM_ERROR",
+          "Upstream model is temporarily overloaded. Please retry.",
+          "UPSTREAM_OVERLOAD",
+          { model: attemptModel },
+        );
+      }
+
+      if (isTimeoutError(message)) {
+        return error(
+          UPSTREAM_DEPENDENCY_STATUS,
+          "UPSTREAM_ERROR",
+          "Upstream request timed out. Please retry.",
+          "UPSTREAM_TIMEOUT",
+          { model: attemptModel },
+        );
+      }
+
+      if (transientUpstream) {
+        return error(
+          UPSTREAM_DEPENDENCY_STATUS,
+          "UPSTREAM_ERROR",
+          "Upstream model request failed transiently. Please retry.",
+          "UPSTREAM_TRANSIENT",
+          { model: attemptModel },
+        );
+      }
+
       return error(
-        502,
+        UPSTREAM_DEPENDENCY_STATUS,
         "UPSTREAM_ERROR",
-        "Transcript analysis failed validation.",
-        "VALIDATION_FAILED",
-        validationError,
+        `Transcript analysis failed: ${message}`,
+        "UPSTREAM_FAILURE",
+        { model: attemptModel },
       );
     }
-
-    return json(result);
-  } catch (err: any) {
-    const message = String(err?.message || "Unknown error");
-
-    if (isUpstreamRateLimit(message)) {
-      const retryAfterSeconds = extractRetryAfterSeconds(message);
-      return error(
-        429,
-        "RATE_LIMIT",
-        retryAfterSeconds
-          ? `Gemini quota/rate limit reached. Retry in about ${retryAfterSeconds}s.`
-          : "Gemini quota/rate limit reached. Please retry shortly.",
-        "UPSTREAM_RATE_LIMIT",
-      );
-    }
-
-    if (message.includes("503") || message.toLowerCase().includes("overload")) {
-      return error(502, "UPSTREAM_ERROR", "Gemini is temporarily overloaded. Please retry.", "UPSTREAM_OVERLOAD");
-    }
-
-    if (
-      message.includes("500") ||
-      message.includes("502") ||
-      message.includes("504") ||
-      message.toLowerCase().includes("timed out") ||
-      message.toLowerCase().includes("timeout")
-    ) {
-      return error(502, "UPSTREAM_ERROR", "Gemini request timed out or failed upstream. Please retry.", "UPSTREAM_TIMEOUT");
-    }
-
-    return error(502, "UPSTREAM_ERROR", `Transcript analysis failed: ${message}`, "UPSTREAM_FAILURE");
   }
+
+  return error(UPSTREAM_DEPENDENCY_STATUS, "UPSTREAM_ERROR", `Transcript analysis failed: ${lastMessage}`, "UPSTREAM_FAILURE");
 }

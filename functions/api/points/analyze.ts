@@ -10,6 +10,8 @@ const MAX_TOTAL_IMAGE_CHARS = 20 * 1024 * 1024;
 const DEFAULT_MODEL = "gemini-2.5-flash";
 const ALLOWED_MODELS = new Set(["gemini-2.5-flash", "gemini-3-pro-preview"]);
 const IS_STRICT_VALIDATION: boolean = false;
+const UPSTREAM_DEPENDENCY_STATUS = 424;
+const VALIDATION_STATUS = 422;
 
 const json = (payload: unknown, status = 200): Response =>
   new Response(JSON.stringify(payload), {
@@ -201,7 +203,7 @@ export async function onRequestPost(context: any): Promise<Response> {
     const validationError = validatePointsResult(result, pageImages.length);
     if (validationError) {
       return error(
-        502,
+        VALIDATION_STATUS,
         "UPSTREAM_ERROR",
         "Presentation analysis failed validation.",
         "VALIDATION_FAILED",
@@ -226,12 +228,12 @@ export async function onRequestPost(context: any): Promise<Response> {
     }
 
     if (message.includes("503") || message.toLowerCase().includes("overload")) {
-      return error(502, "UPSTREAM_ERROR", "Gemini is temporarily overloaded. Please retry.", "UPSTREAM_OVERLOAD");
+      return error(UPSTREAM_DEPENDENCY_STATUS, "UPSTREAM_ERROR", "Gemini is temporarily overloaded. Please retry.", "UPSTREAM_OVERLOAD");
     }
 
     if (message.toLowerCase().includes("unable to process input image")) {
       return error(
-        502,
+        UPSTREAM_DEPENDENCY_STATUS,
         "UPSTREAM_ERROR",
         "Gemini could not process one or more slide images for this chunk. Retrying may work.",
         "UPSTREAM_IMAGE_PROCESSING",
@@ -239,13 +241,13 @@ export async function onRequestPost(context: any): Promise<Response> {
     }
 
     if (message.toLowerCase().includes("timed out") || message.toLowerCase().includes("timeout")) {
-      return error(502, "UPSTREAM_ERROR", "Upstream request timed out. Please retry.", "UPSTREAM_TIMEOUT");
+      return error(UPSTREAM_DEPENDENCY_STATUS, "UPSTREAM_ERROR", "Upstream request timed out. Please retry.", "UPSTREAM_TIMEOUT");
     }
 
     if (message.includes("500") || message.includes("502") || message.includes("504")) {
-      return error(502, "UPSTREAM_ERROR", "Gemini request failed upstream. Please retry.", "UPSTREAM_TRANSIENT");
+      return error(UPSTREAM_DEPENDENCY_STATUS, "UPSTREAM_ERROR", "Gemini request failed upstream. Please retry.", "UPSTREAM_TRANSIENT");
     }
 
-    return error(502, "UPSTREAM_ERROR", `Presentation analysis failed: ${message}`, "UPSTREAM_FAILURE");
+    return error(UPSTREAM_DEPENDENCY_STATUS, "UPSTREAM_ERROR", `Presentation analysis failed: ${message}`, "UPSTREAM_FAILURE");
   }
 }

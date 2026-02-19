@@ -78,6 +78,9 @@ const parseApiErrorMessage = async (response: Response): Promise<string> => {
         }
         return `${fallbackMessage}${retrySuffix}`.trim();
       }
+      if (/^error code:\s*5\d{2}$/i.test(rawText)) {
+        return `Temporary gateway error (status ${response.status}). Please retry.${retrySuffix}`.trim();
+      }
       const snippet = rawText.length > 320 ? `${rawText.slice(0, 320)}...` : rawText;
       return `${fallbackMessage} ${snippet}${retrySuffix}`.trim();
     }

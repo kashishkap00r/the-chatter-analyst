@@ -18,8 +18,6 @@ export const CHATTER_RESPONSE_SCHEMA = {
     companyDescription: { type: "STRING" },
     quotes: {
       type: "ARRAY",
-      minItems: 20,
-      maxItems: 20,
       items: {
         type: "OBJECT",
         properties: {
@@ -33,21 +31,7 @@ export const CHATTER_RESPONSE_SCHEMA = {
             },
             required: ["name", "designation"],
           },
-          category: {
-            type: "STRING",
-            enum: [
-              "Financial Guidance",
-              "Capital Allocation",
-              "Cost & Supply Chain",
-              "Tech & Disruption",
-              "Regulation & Policy",
-              "Macro & Geopolitics",
-              "ESG & Climate",
-              "Legal & Governance",
-              "Competitive Landscape",
-              "Other Material",
-            ],
-          },
+          category: { type: "STRING" },
         },
         required: ["quote", "summary", "speaker", "category"],
       },
