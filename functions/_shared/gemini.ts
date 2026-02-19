@@ -1,6 +1,5 @@
 const AI_STUDIO_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 const VERTEX_EXPRESS_API_BASE = "https://aiplatform.googleapis.com/v1beta1/publishers/google/models";
-const OPENROUTER_API_BASE = "https://openrouter.ai/api/v1/chat/completions";
 
 export type GeminiProvider = "ai_studio" | "vertex_express";
 export type GeminiProviderPreference = GeminiProvider;
@@ -178,20 +177,6 @@ const parseGeminiText = (payload: any): string => {
     .trim();
 };
 
-const parseOpenRouterText = (payload: any): string => {
-  const content = payload?.choices?.[0]?.message?.content;
-  if (typeof content === "string") {
-    return content.trim();
-  }
-  if (Array.isArray(content)) {
-    return content
-      .map((item: any) => (typeof item?.text === "string" ? item.text : ""))
-      .join("\n")
-      .trim();
-  }
-  return "";
-};
-
 const stripJsonFence = (text: string): string =>
   text
     .replace(/```json\s*/gi, "")
@@ -200,27 +185,16 @@ const stripJsonFence = (text: string): string =>
 
 const REQUEST_TIMEOUT_MS = 30000;
 const MAX_AI_STUDIO_ATTEMPTS = 6;
+const MAX_VERTEX_EXPRESS_ATTEMPTS = 4;
 const RETRY_BASE_DELAY_MS = 200;
 const RETRY_MAX_DELAY_MS = 1600;
-const TRANSIENT_STATUS_CODES = new Set([500, 502, 503, 504]);
-const OPENROUTER_REQUEST_TIMEOUT_MS = 45000;
+const TRANSIENT_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 
 const parseErrorMessage = (payload: any, status: number, provider: GeminiProvider): string => {
   if (typeof payload?.error?.message === "string" && payload.error.message.trim()) {
     return `Gemini (${provider}) request failed with status ${status}: ${payload.error.message.trim()}`;
   }
   return `Gemini (${provider}) request failed with status ${status}.`;
-};
-
-const parseOpenRouterErrorMessage = (payload: any, status: number): string => {
-  const payloadMessage =
-    payload?.error?.message ||
-    payload?.error?.metadata?.raw ||
-    payload?.message;
-  if (typeof payloadMessage === "string" && payloadMessage.trim()) {
-    return `OpenRouter request failed with status ${status}: ${payloadMessage.trim()}`;
-  }
-  return `OpenRouter request failed with status ${status}.`;
 };
 
 const isLocationUnsupportedError = (message: string): boolean => {
@@ -242,14 +216,24 @@ const isTimeoutOrNetworkError = (message: string): boolean => {
   );
 };
 
-const isRetryableAiStudioFailure = (status: number | null, message: string): boolean => {
-  if (isLocationUnsupportedError(message)) {
-    return true;
-  }
-  if (typeof status === "number" && TRANSIENT_STATUS_CODES.has(status)) {
-    return true;
-  }
-  return isTimeoutOrNetworkError(message);
+const isRetryableGeminiFailure = (status: number | null, message: string): boolean => {
+  const normalized = message.toLowerCase();
+  if (isLocationUnsupportedError(message)) return true;
+  if (isTimeoutOrNetworkError(message)) return true;
+  if (typeof status === "number" && TRANSIENT_STATUS_CODES.has(status)) return true;
+  return (
+    normalized.includes("rate limit") ||
+    normalized.includes("resource exhausted") ||
+    normalized.includes("quota") ||
+    normalized.includes("high demand") ||
+    normalized.includes("overload") ||
+    normalized.includes("temporarily unavailable")
+  );
+};
+
+const isRetryableGeminiOutputFailure = (message: string): boolean => {
+  const normalized = message.toLowerCase();
+  return normalized.includes("returned an empty response") || normalized.includes("returned invalid json");
 };
 
 const sleep = async (ms: number): Promise<void> =>
@@ -271,9 +255,22 @@ export const normalizeGeminiProviderPreference = (value: unknown): GeminiProvide
   return "ai_studio";
 };
 
-const resolveProviderOrder = (preference: GeminiProviderPreference): GeminiProvider[] => {
-  if (preference === "ai_studio") return ["ai_studio"];
-  return ["vertex_express"];
+const resolveProviderOrder = (
+  preference: GeminiProviderPreference,
+  hasAiStudioCredential: boolean,
+  hasVertexCredential: boolean,
+): GeminiProvider[] => {
+  const ordered: GeminiProvider[] = [];
+
+  if (preference === "ai_studio") {
+    if (hasAiStudioCredential) ordered.push("ai_studio");
+    if (hasVertexCredential) ordered.push("vertex_express");
+  } else {
+    if (hasVertexCredential) ordered.push("vertex_express");
+    if (hasAiStudioCredential) ordered.push("ai_studio");
+  }
+
+  return ordered;
 };
 
 const endpointForProvider = (provider: GeminiProvider, model: string, apiKey: string): string => {
@@ -292,21 +289,35 @@ export const callGeminiJson = async (params: {
 }): Promise<any> => {
   const { apiKey, vertexApiKey, model, contents, responseSchema, requestId } = params;
   const providerPreference = normalizeGeminiProviderPreference(params.providerPreference);
-  const providers = resolveProviderOrder(providerPreference);
+  const trimmedAiStudioKey = typeof apiKey === "string" ? apiKey.trim() : "";
+  const trimmedVertexKey = typeof vertexApiKey === "string" ? vertexApiKey.trim() : "";
+  const hasAiStudioCredential = Boolean(trimmedAiStudioKey);
+  const hasVertexCredential = Boolean(trimmedVertexKey || trimmedAiStudioKey);
+  const providers = resolveProviderOrder(providerPreference, hasAiStudioCredential, hasVertexCredential);
   const providerErrors: string[] = [];
+
+  if (providers.length === 0) {
+    throw new Error("Gemini request failed: no provider credential is configured.");
+  }
 
   for (let index = 0; index < providers.length; index++) {
     const provider = providers[index];
-    const keyForProvider = provider === "vertex_express" ? vertexApiKey?.trim() : apiKey;
-    const maxAttempts = provider === "ai_studio" ? MAX_AI_STUDIO_ATTEMPTS : 1;
+    const keyForProvider = provider === "vertex_express" ? trimmedVertexKey || trimmedAiStudioKey : trimmedAiStudioKey;
+    const hasProviderFallback = providers.length > 1;
+    const maxAttempts =
+      provider === "ai_studio"
+        ? (hasProviderFallback ? Math.min(MAX_AI_STUDIO_ATTEMPTS, 4) : MAX_AI_STUDIO_ATTEMPTS)
+        : MAX_VERTEX_EXPRESS_ATTEMPTS;
 
     if (!keyForProvider) {
       const missingKeyMessage =
         provider === "vertex_express"
           ? "Gemini (vertex_express) request failed: VERTEX_API_KEY is missing."
           : "Gemini (ai_studio) request failed: GEMINI_API_KEY is missing.";
-      providerErrors.push(missingKeyMessage);
-      throw new Error(providerErrors.join(" | "));
+      if (!providerErrors.includes(missingKeyMessage)) {
+        providerErrors.push(missingKeyMessage);
+      }
+      continue;
     }
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -346,7 +357,9 @@ export const callGeminiJson = async (params: {
             providerErrors.push(message);
           }
 
-          const shouldRetry = provider === "ai_studio" && attempt < maxAttempts && isRetryableAiStudioFailure(response.status, message);
+          const shouldRetry =
+            attempt < maxAttempts &&
+            (isRetryableGeminiFailure(response.status, message) || isRetryableGeminiOutputFailure(message));
           if (shouldRetry) {
             const waitMs = computeRetryDelayMs(attempt);
             console.log(
@@ -363,10 +376,13 @@ export const callGeminiJson = async (params: {
               }),
             );
             await sleep(waitMs);
+            if (hasProviderFallback && isLocationUnsupportedError(message) && attempt >= 2) {
+              break;
+            }
             continue;
           }
 
-          throw new Error(providerErrors.join(" | "));
+          break;
         }
 
         const text = parseGeminiText(payload);
@@ -385,7 +401,9 @@ export const callGeminiJson = async (params: {
           providerErrors.push(message);
         }
 
-        const shouldRetry = provider === "ai_studio" && attempt < maxAttempts && isRetryableAiStudioFailure(status, message);
+        const shouldRetry =
+          attempt < maxAttempts &&
+          (isRetryableGeminiFailure(status, message) || isRetryableGeminiOutputFailure(message));
         if (shouldRetry) {
           const waitMs = computeRetryDelayMs(attempt);
           console.log(
@@ -398,14 +416,17 @@ export const callGeminiJson = async (params: {
               maxAttempts,
               reason: "network_or_timeout",
               status,
-              waitMs,
-            }),
-          );
+                waitMs,
+              }),
+            );
           await sleep(waitMs);
+          if (hasProviderFallback && isLocationUnsupportedError(message) && attempt >= 2) {
+            break;
+          }
           continue;
         }
 
-        throw new Error(providerErrors.join(" | "));
+        break;
       } finally {
         clearTimeout(timeout);
       }
@@ -413,90 +434,4 @@ export const callGeminiJson = async (params: {
   }
 
   throw new Error(providerErrors.join(" | ") || "Unknown Gemini request failure.");
-};
-
-type OpenRouterMessageContent =
-  | string
-  | Array<
-      | { type: "text"; text: string }
-      | { type: "image_url"; image_url: { url: string } }
-    >;
-
-export const callOpenRouterJson = async (params: {
-  apiKey: string;
-  model: string;
-  messageContent: OpenRouterMessageContent;
-  requestId?: string;
-  referer?: string;
-  appTitle?: string;
-}): Promise<any> => {
-  const { apiKey, model, messageContent, requestId, referer, appTitle } = params;
-
-  const headers: Record<string, string> = {
-    authorization: `Bearer ${apiKey}`,
-    "content-type": "application/json",
-  };
-  if (typeof referer === "string" && referer.trim()) {
-    headers["HTTP-Referer"] = referer.trim();
-  }
-  if (typeof appTitle === "string" && appTitle.trim()) {
-    headers["X-Title"] = appTitle.trim();
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort("timeout"), OPENROUTER_REQUEST_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(OPENROUTER_API_BASE, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model,
-        temperature: 0.2,
-        max_tokens: 8192,
-        messages: [
-          {
-            role: "user",
-            content: messageContent,
-          },
-        ],
-      }),
-      signal: controller.signal,
-    });
-
-    let payload: any = null;
-    try {
-      payload = await response.json();
-    } catch {
-      // Keep null payload; handled below.
-    }
-
-    if (!response.ok) {
-      throw new Error(parseOpenRouterErrorMessage(payload, response.status));
-    }
-
-    const text = parseOpenRouterText(payload);
-    if (!text) {
-      throw new Error("OpenRouter returned an empty response.");
-    }
-
-    try {
-      return JSON.parse(stripJsonFence(text));
-    } catch {
-      throw new Error("OpenRouter returned invalid JSON.");
-    }
-  } catch (error: any) {
-    const message = String(error?.message || "Unknown OpenRouter request failure.");
-    console.log(
-      JSON.stringify({
-        event: "openrouter_request_failure",
-        requestId,
-        model,
-        message,
-      }),
-    );
-    throw new Error(message);
-  } finally {
-    clearTimeout(timeout);
-  }
 };

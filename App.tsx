@@ -229,7 +229,6 @@ const App: React.FC = () => {
   const [textInput, setTextInput] = useState('');
   const [model, setModel] = useState<ModelType>(ModelType.FLASH);
   const [pointsModel, setPointsModel] = useState<ModelType>(ModelType.FLASH);
-  const [enableOpenRouterFallback, setEnableOpenRouterFallback] = useState(false);
 
   const [batchFiles, setBatchFiles] = useState<BatchFile[]>([]);
   const [isAnalyzingBatch, setIsAnalyzingBatch] = useState(false);
@@ -271,14 +270,13 @@ const App: React.FC = () => {
     async (
       transcript: string,
       modelId: ModelType,
-      useOpenRouterFallback: boolean,
       onProgress: (progress: ProgressEvent) => void,
       onRetryNotice: (message: string) => void,
     ): Promise<ChatterAnalysisResult> => {
       let lastError: any = null;
       for (let attempt = 0; attempt <= CHATTER_MAX_RETRIES; attempt++) {
         try {
-          return await analyzeTranscript(transcript, modelId, useOpenRouterFallback, onProgress);
+          return await analyzeTranscript(transcript, modelId, onProgress);
         } catch (error: any) {
           lastError = error;
           const errorMessage = String(error?.message || 'Analysis failed.');
@@ -319,7 +317,6 @@ const App: React.FC = () => {
       const result = await runTranscriptWithRetry(
         textInput,
         model,
-        enableOpenRouterFallback,
         (progress) => {
           setChatterSingleState((prev) => ({
             ...prev,
@@ -352,7 +349,7 @@ const App: React.FC = () => {
         progress: { stage: 'error', message: 'Analysis failed.', percent: 100 },
       });
     }
-  }, [enableOpenRouterFallback, model, runTranscriptWithRetry, textInput]);
+  }, [model, runTranscriptWithRetry, textInput]);
 
   const handleAnalyzeBatch = useCallback(async () => {
     const pendingIndexes = batchFiles
@@ -403,7 +400,6 @@ const App: React.FC = () => {
         const result = await runTranscriptWithRetry(
           nextFiles[fileIndex].content,
           model,
-          enableOpenRouterFallback,
           (progress) => {
             nextFiles[fileIndex] = {
               ...nextFiles[fileIndex],
@@ -499,7 +495,7 @@ const App: React.FC = () => {
     }
 
     setIsAnalyzingBatch(false);
-  }, [batchFiles, enableOpenRouterFallback, model, runTranscriptWithRetry]);
+  }, [batchFiles, model, runTranscriptWithRetry]);
 
   const handleChatterFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -695,7 +691,6 @@ const App: React.FC = () => {
                 (message) => onChunkProgress(message),
                 range.startPage - 1,
                 pointsModel,
-                enableOpenRouterFallback,
               );
               chunkResults.push(chunkResult);
               chunkSucceeded = true;
@@ -808,7 +803,7 @@ const App: React.FC = () => {
     }
 
     setIsAnalyzingPointsBatch(false);
-  }, [enableOpenRouterFallback, pointsBatchFiles, pointsModel]);
+  }, [pointsBatchFiles, pointsModel]);
 
   const handleCopyAllChatter = useCallback(async () => {
     const completedResults = getCompletedChatterResults();
@@ -1400,16 +1395,6 @@ const App: React.FC = () => {
                     <option value={ModelType.FLASH}>Gemini 2.5 Flash (Fast)</option>
                     <option value={ModelType.PRO}>Gemini 3 Pro (Deep)</option>
                   </select>
-                </label>
-
-                <label className="inline-flex items-center gap-2 text-sm font-semibold text-stone">
-                  <input
-                    type="checkbox"
-                    checked={enableOpenRouterFallback}
-                    onChange={(event) => setEnableOpenRouterFallback(event.target.checked)}
-                    className="h-4 w-4 rounded border-line text-brand focus:ring-brand/30"
-                  />
-                  OpenRouter Backup
                 </label>
               </div>
             </div>

@@ -5,8 +5,6 @@ interface Env {
   GEMINI_API_KEY?: string;
   VERTEX_API_KEY?: string;
   GEMINI_PROVIDER?: string;
-  OPENROUTER_API_KEY?: string;
-  OPENROUTER_MODEL?: string;
 }
 
 type HealthState =
@@ -213,13 +211,16 @@ const evaluateOverallState = (results: ModelHealth[]): HealthState => {
 
 const missingKeyMessage = (provider: GeminiProvider): string =>
   provider === "vertex_express"
-    ? "VERTEX_API_KEY is required when GEMINI_PROVIDER=vertex_express."
+    ? "VERTEX_API_KEY (or GEMINI_API_KEY fallback) is required when GEMINI_PROVIDER=vertex_express."
     : "GEMINI_API_KEY is required for ai_studio provider.";
 
 const handleGeminiHealth = async (context: any): Promise<Response> => {
   const env = context.env as Env;
   const providerPreference = resolveProvider(env?.GEMINI_PROVIDER);
-  const apiKey = providerPreference === "vertex_express" ? env?.VERTEX_API_KEY : env?.GEMINI_API_KEY;
+  const apiKey =
+    providerPreference === "vertex_express"
+      ? env?.VERTEX_API_KEY || env?.GEMINI_API_KEY
+      : env?.GEMINI_API_KEY;
 
   if (!apiKey) {
     return json({
@@ -229,11 +230,6 @@ const handleGeminiHealth = async (context: any): Promise<Response> => {
       keyConfigured: false,
       keyState: "missing",
       providerPreference,
-      openRouterConfigured: Boolean(env?.OPENROUTER_API_KEY),
-      openRouterModel:
-        typeof env?.OPENROUTER_MODEL === "string" && env.OPENROUTER_MODEL.trim()
-          ? env.OPENROUTER_MODEL.trim()
-          : "openrouter/free",
       message: missingKeyMessage(providerPreference),
       models: [],
     });
@@ -251,7 +247,8 @@ const handleGeminiHealth = async (context: any): Promise<Response> => {
   if (overallState === "ok") {
     guidance = "Gemini key and model endpoints are reachable.";
   } else if (overallState === "location_unsupported") {
-    guidance = "Gemini is intermittently blocked by provider location policy. Retry should usually recover.";
+    guidance =
+      "Gemini is intermittently blocked by provider location policy. Retry may recover; configure VERTEX_API_KEY for provider-level failover.";
   } else {
     guidance =
       "Check models[].state for root cause (invalid_key, rate_limited, overloaded, timeout, location_unsupported, or upstream_error).";
@@ -264,11 +261,6 @@ const handleGeminiHealth = async (context: any): Promise<Response> => {
     keyConfigured: true,
     keyState,
     providerPreference,
-    openRouterConfigured: Boolean(env?.OPENROUTER_API_KEY),
-    openRouterModel:
-      typeof env?.OPENROUTER_MODEL === "string" && env.OPENROUTER_MODEL.trim()
-        ? env.OPENROUTER_MODEL.trim()
-        : "openrouter/free",
     models: modelResults,
     guidance,
   });
