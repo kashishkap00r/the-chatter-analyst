@@ -25,6 +25,17 @@ const ALLOWED_CATEGORIES = new Set([
   "Competitive Landscape",
   "Other Material",
 ]);
+const CATEGORY_NORMALIZATION_RULES: Array<{ match: RegExp; normalized: string }> = [
+  { match: /(financial|guidance|margin|profit|revenue|ebitda)/i, normalized: "Financial Guidance" },
+  { match: /(capital|capex|allocation|buyback|dividend)/i, normalized: "Capital Allocation" },
+  { match: /(cost|supply|procurement|input)/i, normalized: "Cost & Supply Chain" },
+  { match: /(tech|technology|digital|automation|ai)/i, normalized: "Tech & Disruption" },
+  { match: /(regulat|policy|compliance|government)/i, normalized: "Regulation & Policy" },
+  { match: /(macro|geopolitic|inflation|currency|demand cycle)/i, normalized: "Macro & Geopolitics" },
+  { match: /(esg|climate|sustainab)/i, normalized: "ESG & Climate" },
+  { match: /(legal|governance|litigation|audit)/i, normalized: "Legal & Governance" },
+  { match: /(competitive|competition|market share|peer)/i, normalized: "Competitive Landscape" },
+];
 
 const json = (payload: unknown, status = 200): Response =>
   new Response(JSON.stringify(payload), {
@@ -90,6 +101,22 @@ const isUpstreamTransientError = (message: string): boolean =>
   message.includes("502") ||
   message.includes("504");
 
+const normalizeCategory = (rawCategory: string): string => {
+  const trimmed = rawCategory.trim();
+  if (!trimmed) {
+    return "Other Material";
+  }
+  if (ALLOWED_CATEGORIES.has(trimmed)) {
+    return trimmed;
+  }
+  for (const rule of CATEGORY_NORMALIZATION_RULES) {
+    if (rule.match.test(trimmed)) {
+      return rule.normalized;
+    }
+  }
+  return "Other Material";
+};
+
 const validateChatterResult = (result: any): string | null => {
   if (!result || typeof result !== "object") {
     return "Gemini response is not a JSON object.";
@@ -139,11 +166,7 @@ const validateChatterResult = (result: any): string | null => {
     if (!hasNonEmptyString(quoteItem.category)) {
       return `Quote #${quoteIndex} is missing 'category'.`;
     }
-    const normalizedCategory = quoteItem.category.trim();
-    if (!ALLOWED_CATEGORIES.has(normalizedCategory)) {
-      return `Quote #${quoteIndex} has invalid category '${quoteItem.category}'.`;
-    }
-    quoteItem.category = normalizedCategory;
+    quoteItem.category = normalizeCategory(quoteItem.category);
     if (!quoteItem.speaker || typeof quoteItem.speaker !== "object") {
       return `Quote #${quoteIndex} is missing 'speaker'.`;
     }
