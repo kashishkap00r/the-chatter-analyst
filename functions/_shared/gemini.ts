@@ -106,7 +106,7 @@ CORE MISSION
    Prefer spread across early/middle/late pages whenever material exists.
 8. For each quote, provide:
    a) verbatim management quote
-   b) one-sentence investor implication summary
+   b) a two-sentence investor implication summary in simple English
    c) speaker name and designation
 
 QUOTE QUALITY RULES
@@ -114,6 +114,12 @@ QUOTE QUALITY RULES
 - Prefer high-signal statements: guidance, demand trends, margins/profitability, capex/allocation, risks, competitive or regulatory shifts.
 - Avoid repetitive quotes that convey the same point.
 - Preserve original wording; do not paraphrase inside quote.
+
+SUMMARY LANGUAGE RULES
+- Write the summary for a normal reader in clear, simple English.
+- Use short sentences and everyday wording; avoid unnecessary complex jargon.
+- Sentence 1 should state the key business takeaway from the quote.
+- Sentence 2 should state why that takeaway matters for investors.
 
 OUTPUT RULES
 - Use market cap labels like Large Cap, Mid Cap, Small Cap, or Micro Cap.
