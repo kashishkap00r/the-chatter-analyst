@@ -101,8 +101,14 @@ export interface PointsAnalysisState {
 
 // --- General Types ---
 
+export enum ProviderType {
+  GEMINI = 'gemini',
+  OPENROUTER = 'openrouter',
+}
+
 export enum ModelType {
   PRO = 'gemini-3-pro-preview',
   FLASH_3 = 'gemini-3-flash-preview',
   FLASH = 'gemini-2.5-flash',
+  OPENROUTER_MINIMAX = 'minimax/minimax-01',
 }

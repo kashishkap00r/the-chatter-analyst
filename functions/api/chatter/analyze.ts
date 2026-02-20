@@ -1,5 +1,6 @@
 import {
   callGeminiJson,
+  callOpenRouterJson,
   CHATTER_PROMPT,
   CHATTER_RESPONSE_SCHEMA,
   normalizeGeminiProviderPreference,
@@ -9,15 +10,24 @@ interface Env {
   GEMINI_API_KEY?: string;
   VERTEX_API_KEY?: string;
   GEMINI_PROVIDER?: string;
+  OPENROUTER_API_KEY?: string;
+  OPENROUTER_SITE_URL?: string;
+  OPENROUTER_APP_TITLE?: string;
 }
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_TRANSCRIPT_CHARS = 800000;
+const PROVIDER_GEMINI = "gemini";
+const PROVIDER_OPENROUTER = "openrouter";
+const DEFAULT_PROVIDER = PROVIDER_GEMINI;
 const FLASH_MODEL = "gemini-2.5-flash";
 const FLASH_3_MODEL = "gemini-3-flash-preview";
 const PRO_MODEL = "gemini-3-pro-preview";
+const OPENROUTER_PRIMARY_MODEL = "minimax/minimax-01";
+const OPENROUTER_BACKUP_MODEL = "qwen/qwen3-vl-235b-a22b-instruct";
 const DEFAULT_MODEL = FLASH_MODEL;
 const ALLOWED_MODELS = new Set([FLASH_MODEL, FLASH_3_MODEL, PRO_MODEL]);
+const OPENROUTER_ALLOWED_MODELS = new Set([OPENROUTER_PRIMARY_MODEL]);
 const REQUIRED_QUOTES_COUNT = 20;
 const UPSTREAM_DEPENDENCY_STATUS = 424;
 const VALIDATION_STATUS = 422;
@@ -143,6 +153,26 @@ const getModelAttemptOrder = (requestedModel: string): string[] => {
   return [PRO_MODEL, FLASH_3_MODEL, FLASH_MODEL];
 };
 
+const parseProvider = (value: unknown): string => {
+  if (typeof value !== "string") return DEFAULT_PROVIDER;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === PROVIDER_GEMINI) return PROVIDER_GEMINI;
+  if (normalized === PROVIDER_OPENROUTER) return PROVIDER_OPENROUTER;
+  return "";
+};
+
+const getOpenRouterAttemptOrder = (requestedModel: string): string[] => {
+  if (requestedModel === OPENROUTER_BACKUP_MODEL) {
+    return [OPENROUTER_BACKUP_MODEL, OPENROUTER_PRIMARY_MODEL];
+  }
+  return [OPENROUTER_PRIMARY_MODEL, OPENROUTER_BACKUP_MODEL];
+};
+
+const isStructuredOutputError = (message: string): boolean => {
+  const normalized = message.toLowerCase();
+  return normalized.includes("invalid json") || normalized.includes("empty response");
+};
+
 const validateChatterResult = (result: any): string | null => {
   if (!result || typeof result !== "object") {
     return "Gemini response is not a JSON object.";
@@ -210,12 +240,7 @@ const validateChatterResult = (result: any): string | null => {
 export async function onRequestPost(context: any): Promise<Response> {
   const request = context.request as Request;
   const env = context.env as Env;
-  const primaryApiKey = env?.GEMINI_API_KEY;
   const requestId = request.headers.get("cf-ray") || crypto.randomUUID();
-
-  if (!primaryApiKey) {
-    return error(500, "INTERNAL", "Server is missing GEMINI_API_KEY.", "MISSING_GEMINI_KEY");
-  }
 
   const contentLength = Number(request.headers.get("content-length") || "0");
   if (contentLength > MAX_BODY_BYTES) {
@@ -234,19 +259,45 @@ export async function onRequestPost(context: any): Promise<Response> {
     return error(400, "BAD_REQUEST", "Field 'transcript' is required.", "MISSING_TRANSCRIPT");
   }
 
-  const model = typeof body?.model === "string" ? body.model : DEFAULT_MODEL;
-  if (!ALLOWED_MODELS.has(model)) {
-    return error(400, "BAD_REQUEST", "Field 'model' is invalid.", "INVALID_MODEL");
+  const provider = parseProvider(body?.provider);
+  if (!provider) {
+    return error(400, "BAD_REQUEST", "Field 'provider' is invalid.", "INVALID_PROVIDER");
   }
 
-  const modelAttemptOrder = getModelAttemptOrder(model);
-  const providerPreference = normalizeGeminiProviderPreference(env?.GEMINI_PROVIDER);
+  const model =
+    typeof body?.model === "string" && body.model.trim()
+      ? body.model.trim()
+      : provider === PROVIDER_OPENROUTER
+        ? OPENROUTER_PRIMARY_MODEL
+        : DEFAULT_MODEL;
+
+  if (provider === PROVIDER_GEMINI && !ALLOWED_MODELS.has(model)) {
+    return error(400, "BAD_REQUEST", "Field 'model' is invalid for provider 'gemini'.", "INVALID_MODEL");
+  }
+  if (provider === PROVIDER_OPENROUTER && !OPENROUTER_ALLOWED_MODELS.has(model)) {
+    return error(400, "BAD_REQUEST", "Field 'model' is invalid for provider 'openrouter'.", "INVALID_MODEL");
+  }
+
+  const primaryApiKey = env?.GEMINI_API_KEY;
+  const openRouterApiKey = env?.OPENROUTER_API_KEY;
+  if (provider === PROVIDER_GEMINI && !primaryApiKey) {
+    return error(500, "INTERNAL", "Server is missing GEMINI_API_KEY.", "MISSING_GEMINI_KEY");
+  }
+  if (provider === PROVIDER_OPENROUTER && !openRouterApiKey) {
+    return error(500, "INTERNAL", "Server is missing OPENROUTER_API_KEY.", "MISSING_OPENROUTER_KEY");
+  }
+
+  const modelAttemptOrder =
+    provider === PROVIDER_GEMINI ? getModelAttemptOrder(model) : getOpenRouterAttemptOrder(model);
+  const providerPreference =
+    provider === PROVIDER_GEMINI ? normalizeGeminiProviderPreference(env?.GEMINI_PROVIDER) : undefined;
   const inputText = `${CHATTER_PROMPT}\n\nINPUT TRANSCRIPT:\n${transcript.substring(0, MAX_TRANSCRIPT_CHARS)}`;
 
   console.log(
     JSON.stringify({
       event: "chatter_request_start",
       requestId,
+      provider,
       requestedModel: model,
       providerPreference,
       transcriptChars: transcript.length,
@@ -259,19 +310,31 @@ export async function onRequestPost(context: any): Promise<Response> {
     const hasFallback = attemptIndex < modelAttemptOrder.length - 1;
 
     try {
-      const result = await callGeminiJson({
-        apiKey: primaryApiKey,
-        vertexApiKey: env.VERTEX_API_KEY,
-        providerPreference,
-        requestId,
-        model: attemptModel,
-        contents: [
-          {
-            parts: [{ text: inputText }],
-          },
-        ],
-        responseSchema: CHATTER_RESPONSE_SCHEMA,
-      });
+      const result =
+        provider === PROVIDER_GEMINI
+          ? await callGeminiJson({
+              apiKey: primaryApiKey as string,
+              vertexApiKey: env.VERTEX_API_KEY,
+              providerPreference,
+              requestId,
+              model: attemptModel,
+              contents: [
+                {
+                  parts: [{ text: inputText }],
+                },
+              ],
+              responseSchema: CHATTER_RESPONSE_SCHEMA,
+            })
+          : await callOpenRouterJson({
+              apiKey: openRouterApiKey as string,
+              model: attemptModel,
+              requestId,
+              referer: env.OPENROUTER_SITE_URL,
+              appTitle: env.OPENROUTER_APP_TITLE || "The Chatter Analyst",
+              messageContent:
+                `${inputText}\n\n` +
+                "FINAL OUTPUT REQUIREMENT: Return only one valid JSON object. No markdown, no explanation.",
+            });
 
       const validationError = validateChatterResult(result);
       if (validationError) {
@@ -296,6 +359,7 @@ export async function onRequestPost(context: any): Promise<Response> {
         JSON.stringify({
           event: "chatter_request_success",
           requestId,
+          provider,
           requestedModel: model,
           resolvedModel: attemptModel,
           quotes: Array.isArray(result?.quotes) ? result.quotes.length : null,
@@ -307,6 +371,7 @@ export async function onRequestPost(context: any): Promise<Response> {
           JSON.stringify({
             event: "chatter_model_fallback_success",
             requestId,
+            provider,
             requestedModel: model,
             resolvedModel: attemptModel,
           }),
@@ -318,10 +383,10 @@ export async function onRequestPost(context: any): Promise<Response> {
       const message = String(err?.message || "Unknown error");
       lastMessage = message;
 
-      const schemaConstraint = isSchemaConstraintError(message);
+      const schemaConstraint = isSchemaConstraintError(message) || isStructuredOutputError(message);
       const upstreamRateLimit = isUpstreamRateLimit(message);
       const transientUpstream = isUpstreamTransientError(message);
-      const locationUnsupported = isLocationUnsupportedError(message);
+      const locationUnsupported = provider === PROVIDER_GEMINI && isLocationUnsupportedError(message);
       const shouldFallback =
         hasFallback && (schemaConstraint || upstreamRateLimit || transientUpstream || locationUnsupported);
 
@@ -329,6 +394,7 @@ export async function onRequestPost(context: any): Promise<Response> {
         JSON.stringify({
           event: "chatter_model_attempt_failure",
           requestId,
+          provider,
           model: attemptModel,
           hasFallback,
           schemaConstraint,
@@ -344,6 +410,7 @@ export async function onRequestPost(context: any): Promise<Response> {
 
       const details = {
         requestId,
+        provider,
         model: attemptModel,
       };
 
@@ -353,8 +420,8 @@ export async function onRequestPost(context: any): Promise<Response> {
           429,
           "RATE_LIMIT",
           retryAfterSeconds
-            ? `Gemini quota/rate limit reached. Retry in about ${retryAfterSeconds}s.`
-            : "Gemini quota/rate limit reached. Please retry shortly.",
+            ? `Upstream quota/rate limit reached. Retry in about ${retryAfterSeconds}s.`
+            : "Upstream quota/rate limit reached. Please retry shortly.",
           "UPSTREAM_RATE_LIMIT",
           details,
         );
@@ -374,7 +441,7 @@ export async function onRequestPost(context: any): Promise<Response> {
         return error(
           UPSTREAM_DEPENDENCY_STATUS,
           "UPSTREAM_ERROR",
-          "Upstream model is temporarily overloaded. Please retry.",
+          "Upstream model/provider is temporarily overloaded. Please retry.",
           "UPSTREAM_OVERLOAD",
           details,
         );
@@ -425,6 +492,6 @@ export async function onRequestPost(context: any): Promise<Response> {
     "UPSTREAM_ERROR",
     `Transcript analysis failed: ${lastMessage}`,
     "UPSTREAM_FAILURE",
-    { requestId },
+    { requestId, provider, model },
   );
 }

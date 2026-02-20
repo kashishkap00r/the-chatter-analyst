@@ -1,4 +1,11 @@
-import { ChatterAnalysisResult, ModelType, PointsAndFiguresResult, ProgressEvent, SelectedSlide } from "../types";
+import {
+  ChatterAnalysisResult,
+  ModelType,
+  PointsAndFiguresResult,
+  ProgressEvent,
+  ProviderType,
+  SelectedSlide,
+} from "../types";
 
 const CHATTER_ANALYZE_ENDPOINT = "/api/chatter/analyze";
 const POINTS_ANALYZE_ENDPOINT = "/api/points/analyze";
@@ -118,7 +125,7 @@ const postJson = async <T>(url: string, body: unknown): Promise<T> => {
 
 const transcriptProgressDefaults: ProgressEvent[] = [
   { stage: "preparing", message: "Normalizing transcript and validating structure...", percent: 8 },
-  { stage: "uploading", message: "Sending transcript to Gemini...", percent: 22 },
+  { stage: "uploading", message: "Sending transcript to provider...", percent: 22 },
   { stage: "analyzing", message: "Extracting strategic quotes and implications...", percent: 62 },
   { stage: "finalizing", message: "Structuring insights for output...", percent: 88 },
 ];
@@ -235,6 +242,7 @@ export const convertPdfToImages = async (
 
 export const analyzeTranscript = async (
   transcript: string,
+  provider: ProviderType = ProviderType.GEMINI,
   modelId: ModelType = ModelType.FLASH,
   onProgress?: (event: ProgressEvent) => void,
 ): Promise<ChatterAnalysisResult> => {
@@ -255,6 +263,7 @@ export const analyzeTranscript = async (
 
   try {
     const result = await postJson<ChatterAnalysisResult>(CHATTER_ANALYZE_ENDPOINT, {
+      provider,
       transcript,
       model: modelId,
     });
@@ -277,6 +286,7 @@ export const analyzePresentation = async (
   pageImages: string[],
   onProgress: (msg: string) => void,
   pageOffset = 0,
+  provider: ProviderType = ProviderType.GEMINI,
   modelId: ModelType = ModelType.FLASH,
 ): Promise<PointsAndFiguresResult> => {
   if (!Array.isArray(pageImages) || pageImages.length === 0) {
@@ -285,6 +295,7 @@ export const analyzePresentation = async (
 
   onProgress("Analyzing slides with AI...");
   const result = await postJson<PointsAnalyzeApiResult>(POINTS_ANALYZE_ENDPOINT, {
+    provider,
     pageImages,
     model: modelId,
   });

@@ -8,6 +8,7 @@ import {
 } from './services/geminiService';
 import {
   ModelType,
+  ProviderType,
   type AppMode,
   type BatchFile,
   type ChatterAnalysisResult,
@@ -78,6 +79,16 @@ const POINTS_RETRY_RENDER_PROFILES = [
   { scale: 1.15, jpegQuality: 0.75 },
   { scale: 1.0, jpegQuality: 0.65 },
   { scale: 0.85, jpegQuality: 0.55 },
+];
+
+const GEMINI_MODEL_OPTIONS: Array<{ value: ModelType; label: string }> = [
+  { value: ModelType.FLASH, label: "Gemini 2.5 Flash (Fast)" },
+  { value: ModelType.FLASH_3, label: "Gemini 3 Flash (Balanced)" },
+  { value: ModelType.PRO, label: "Gemini 3 Pro (Deep)" },
+];
+
+const OPENROUTER_MODEL_OPTIONS: Array<{ value: ModelType; label: string }> = [
+  { value: ModelType.OPENROUTER_MINIMAX, label: "MiniMax-01 (OpenRouter)" },
 ];
 
 const mapPointsProgress = (message: string): ProgressEvent => {
@@ -227,8 +238,11 @@ const App: React.FC = () => {
   const [appMode, setAppMode] = useState<AppMode>('chatter');
   const [inputMode, setInputMode] = useState<'text' | 'file'>('file');
   const [textInput, setTextInput] = useState('');
-  const [model, setModel] = useState<ModelType>(ModelType.FLASH);
-  const [pointsModel, setPointsModel] = useState<ModelType>(ModelType.FLASH);
+  const [provider, setProvider] = useState<ProviderType>(ProviderType.GEMINI);
+  const [geminiModel, setGeminiModel] = useState<ModelType>(ModelType.FLASH);
+  const [openRouterModel, setOpenRouterModel] = useState<ModelType>(ModelType.OPENROUTER_MINIMAX);
+  const [geminiPointsModel, setGeminiPointsModel] = useState<ModelType>(ModelType.FLASH);
+  const [openRouterPointsModel, setOpenRouterPointsModel] = useState<ModelType>(ModelType.OPENROUTER_MINIMAX);
 
   const [batchFiles, setBatchFiles] = useState<BatchFile[]>([]);
   const [isAnalyzingBatch, setIsAnalyzingBatch] = useState(false);
@@ -245,6 +259,10 @@ const App: React.FC = () => {
 
   const chatterFileInputRef = useRef<HTMLInputElement>(null);
   const pointsFileInputRef = useRef<HTMLInputElement>(null);
+
+  const selectedChatterModel = provider === ProviderType.GEMINI ? geminiModel : openRouterModel;
+  const selectedPointsModel = provider === ProviderType.GEMINI ? geminiPointsModel : openRouterPointsModel;
+  const currentModelOptions = provider === ProviderType.GEMINI ? GEMINI_MODEL_OPTIONS : OPENROUTER_MODEL_OPTIONS;
 
   const getCompletedChatterResults = useCallback((): ChatterAnalysisResult[] => {
     const results: ChatterAnalysisResult[] = [];
@@ -269,6 +287,7 @@ const App: React.FC = () => {
   const runTranscriptWithRetry = useCallback(
     async (
       transcript: string,
+      providerType: ProviderType,
       modelId: ModelType,
       onProgress: (progress: ProgressEvent) => void,
       onRetryNotice: (message: string) => void,
@@ -276,7 +295,7 @@ const App: React.FC = () => {
       let lastError: any = null;
       for (let attempt = 0; attempt <= CHATTER_MAX_RETRIES; attempt++) {
         try {
-          return await analyzeTranscript(transcript, modelId, onProgress);
+          return await analyzeTranscript(transcript, providerType, modelId, onProgress);
         } catch (error: any) {
           lastError = error;
           const errorMessage = String(error?.message || 'Analysis failed.');
@@ -316,7 +335,8 @@ const App: React.FC = () => {
     try {
       const result = await runTranscriptWithRetry(
         textInput,
-        model,
+        provider,
+        selectedChatterModel,
         (progress) => {
           setChatterSingleState((prev) => ({
             ...prev,
@@ -349,7 +369,7 @@ const App: React.FC = () => {
         progress: { stage: 'error', message: 'Analysis failed.', percent: 100 },
       });
     }
-  }, [model, runTranscriptWithRetry, textInput]);
+  }, [provider, runTranscriptWithRetry, selectedChatterModel, textInput]);
 
   const handleAnalyzeBatch = useCallback(async () => {
     const pendingIndexes = batchFiles
@@ -399,7 +419,8 @@ const App: React.FC = () => {
       try {
         const result = await runTranscriptWithRetry(
           nextFiles[fileIndex].content,
-          model,
+          provider,
+          selectedChatterModel,
           (progress) => {
             nextFiles[fileIndex] = {
               ...nextFiles[fileIndex],
@@ -495,7 +516,7 @@ const App: React.FC = () => {
     }
 
     setIsAnalyzingBatch(false);
-  }, [batchFiles, model, runTranscriptWithRetry]);
+  }, [batchFiles, provider, runTranscriptWithRetry, selectedChatterModel]);
 
   const handleChatterFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -690,7 +711,8 @@ const App: React.FC = () => {
                 pageImages,
                 (message) => onChunkProgress(message),
                 range.startPage - 1,
-                pointsModel,
+                provider,
+                selectedPointsModel,
               );
               chunkResults.push(chunkResult);
               chunkSucceeded = true;
@@ -803,7 +825,7 @@ const App: React.FC = () => {
     }
 
     setIsAnalyzingPointsBatch(false);
-  }, [pointsBatchFiles, pointsModel]);
+  }, [pointsBatchFiles, provider, selectedPointsModel]);
 
   const handleCopyAllChatter = useCallback(async () => {
     const completedResults = getCompletedChatterResults();
@@ -1379,22 +1401,44 @@ const App: React.FC = () => {
 
               <div className="flex flex-wrap items-center justify-end gap-3">
                 <label className="text-sm font-semibold text-stone">
+                  Provider
+                  <select
+                    value={provider}
+                    onChange={(event) => setProvider(event.target.value as ProviderType)}
+                    className="ml-2 rounded-lg border border-line bg-white px-3 py-1.5 text-sm text-ink"
+                  >
+                    <option value={ProviderType.GEMINI}>Gemini</option>
+                    <option value={ProviderType.OPENROUTER}>OpenRouter</option>
+                  </select>
+                </label>
+
+                <label className="text-sm font-semibold text-stone">
                   Model
                   <select
-                    value={appMode === 'chatter' ? model : pointsModel}
+                    value={appMode === 'chatter' ? selectedChatterModel : selectedPointsModel}
                     onChange={(event) => {
                       const selectedModel = event.target.value as ModelType;
-                      if (appMode === 'chatter') {
-                        setModel(selectedModel);
+                      if (provider === ProviderType.GEMINI) {
+                        if (appMode === 'chatter') {
+                          setGeminiModel(selectedModel);
+                        } else {
+                          setGeminiPointsModel(selectedModel);
+                        }
                       } else {
-                        setPointsModel(selectedModel);
+                        if (appMode === 'chatter') {
+                          setOpenRouterModel(selectedModel);
+                        } else {
+                          setOpenRouterPointsModel(selectedModel);
+                        }
                       }
                     }}
                     className="ml-2 rounded-lg border border-line bg-white px-3 py-1.5 text-sm text-ink"
                   >
-                    <option value={ModelType.FLASH}>Gemini 2.5 Flash (Fast)</option>
-                    <option value={ModelType.FLASH_3}>Gemini 3 Flash (Balanced)</option>
-                    <option value={ModelType.PRO}>Gemini 3 Pro (Deep)</option>
+                    {currentModelOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
                   </select>
                 </label>
               </div>

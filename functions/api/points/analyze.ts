@@ -1,5 +1,6 @@
 import {
   callGeminiJson,
+  callOpenRouterJson,
   POINTS_PROMPT,
   POINTS_RESPONSE_SCHEMA,
   normalizeGeminiProviderPreference,
@@ -9,16 +10,25 @@ interface Env {
   GEMINI_API_KEY?: string;
   VERTEX_API_KEY?: string;
   GEMINI_PROVIDER?: string;
+  OPENROUTER_API_KEY?: string;
+  OPENROUTER_SITE_URL?: string;
+  OPENROUTER_APP_TITLE?: string;
 }
 
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
 const MAX_PAGES = 60;
 const MAX_TOTAL_IMAGE_CHARS = 20 * 1024 * 1024;
+const PROVIDER_GEMINI = "gemini";
+const PROVIDER_OPENROUTER = "openrouter";
+const DEFAULT_PROVIDER = PROVIDER_GEMINI;
 const FLASH_MODEL = "gemini-2.5-flash";
 const FLASH_3_MODEL = "gemini-3-flash-preview";
 const PRO_MODEL = "gemini-3-pro-preview";
+const OPENROUTER_PRIMARY_MODEL = "minimax/minimax-01";
+const OPENROUTER_BACKUP_MODEL = "qwen/qwen3-vl-235b-a22b-instruct";
 const DEFAULT_MODEL = FLASH_MODEL;
 const ALLOWED_MODELS = new Set([FLASH_MODEL, FLASH_3_MODEL, PRO_MODEL]);
+const OPENROUTER_ALLOWED_MODELS = new Set([OPENROUTER_PRIMARY_MODEL]);
 const IS_STRICT_VALIDATION: boolean = false;
 const UPSTREAM_DEPENDENCY_STATUS = 424;
 const VALIDATION_STATUS = 422;
@@ -118,6 +128,26 @@ const getModelAttemptOrder = (requestedModel: string): string[] => {
   return [PRO_MODEL, FLASH_3_MODEL, FLASH_MODEL];
 };
 
+const parseProvider = (value: unknown): string => {
+  if (typeof value !== "string") return DEFAULT_PROVIDER;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === PROVIDER_GEMINI) return PROVIDER_GEMINI;
+  if (normalized === PROVIDER_OPENROUTER) return PROVIDER_OPENROUTER;
+  return "";
+};
+
+const getOpenRouterAttemptOrder = (requestedModel: string): string[] => {
+  if (requestedModel === OPENROUTER_BACKUP_MODEL) {
+    return [OPENROUTER_BACKUP_MODEL, OPENROUTER_PRIMARY_MODEL];
+  }
+  return [OPENROUTER_PRIMARY_MODEL, OPENROUTER_BACKUP_MODEL];
+};
+
+const isStructuredOutputError = (message: string): boolean => {
+  const normalized = message.toLowerCase();
+  return normalized.includes("invalid json") || normalized.includes("empty response");
+};
+
 const disallowedContextStart = /^(in this slide|this slide shows|the slide shows)\b/i;
 
 const sanitizeContext = (value: string): string => {
@@ -202,12 +232,7 @@ const extractBase64 = (dataUri: string): string => {
 export async function onRequestPost(context: any): Promise<Response> {
   const request = context.request as Request;
   const env = context.env as Env;
-  const primaryApiKey = env?.GEMINI_API_KEY;
   const requestId = request.headers.get("cf-ray") || crypto.randomUUID();
-
-  if (!primaryApiKey) {
-    return error(500, "INTERNAL", "Server is missing GEMINI_API_KEY.", "MISSING_GEMINI_KEY");
-  }
 
   const contentLength = Number(request.headers.get("content-length") || "0");
   if (contentLength > MAX_BODY_BYTES) {
@@ -226,11 +251,35 @@ export async function onRequestPost(context: any): Promise<Response> {
     return error(400, "BAD_REQUEST", "Field 'pageImages' is required.", "MISSING_PAGE_IMAGES");
   }
 
-  const model = typeof body?.model === "string" ? body.model : DEFAULT_MODEL;
-  const providerPreference = normalizeGeminiProviderPreference(env?.GEMINI_PROVIDER);
-  if (!ALLOWED_MODELS.has(model)) {
-    return error(400, "BAD_REQUEST", "Field 'model' is invalid.", "INVALID_MODEL");
+  const provider = parseProvider(body?.provider);
+  if (!provider) {
+    return error(400, "BAD_REQUEST", "Field 'provider' is invalid.", "INVALID_PROVIDER");
   }
+
+  const model =
+    typeof body?.model === "string" && body.model.trim()
+      ? body.model.trim()
+      : provider === PROVIDER_OPENROUTER
+        ? OPENROUTER_PRIMARY_MODEL
+        : DEFAULT_MODEL;
+  if (provider === PROVIDER_GEMINI && !ALLOWED_MODELS.has(model)) {
+    return error(400, "BAD_REQUEST", "Field 'model' is invalid for provider 'gemini'.", "INVALID_MODEL");
+  }
+  if (provider === PROVIDER_OPENROUTER && !OPENROUTER_ALLOWED_MODELS.has(model)) {
+    return error(400, "BAD_REQUEST", "Field 'model' is invalid for provider 'openrouter'.", "INVALID_MODEL");
+  }
+
+  const primaryApiKey = env?.GEMINI_API_KEY;
+  const openRouterApiKey = env?.OPENROUTER_API_KEY;
+  if (provider === PROVIDER_GEMINI && !primaryApiKey) {
+    return error(500, "INTERNAL", "Server is missing GEMINI_API_KEY.", "MISSING_GEMINI_KEY");
+  }
+  if (provider === PROVIDER_OPENROUTER && !openRouterApiKey) {
+    return error(500, "INTERNAL", "Server is missing OPENROUTER_API_KEY.", "MISSING_OPENROUTER_KEY");
+  }
+
+  const providerPreference =
+    provider === PROVIDER_GEMINI ? normalizeGeminiProviderPreference(env?.GEMINI_PROVIDER) : undefined;
 
   if (pageImages.length > MAX_PAGES) {
     return error(400, "BAD_REQUEST", `A maximum of ${MAX_PAGES} pages is supported.`, "TOO_MANY_PAGES");
@@ -256,6 +305,7 @@ export async function onRequestPost(context: any): Promise<Response> {
     JSON.stringify({
       event: "points_request_start",
       requestId,
+      provider,
       requestedModel: model,
       providerPreference,
       pageCount: pageImages.length,
@@ -263,7 +313,8 @@ export async function onRequestPost(context: any): Promise<Response> {
     }),
   );
 
-  const modelAttemptOrder = getModelAttemptOrder(model);
+  const modelAttemptOrder =
+    provider === PROVIDER_GEMINI ? getModelAttemptOrder(model) : getOpenRouterAttemptOrder(model);
   let lastMessage = "Unknown error";
 
   for (let attemptIndex = 0; attemptIndex < modelAttemptOrder.length; attemptIndex++) {
@@ -271,19 +322,40 @@ export async function onRequestPost(context: any): Promise<Response> {
     const hasFallback = attemptIndex < modelAttemptOrder.length - 1;
 
     try {
-      const result = await callGeminiJson({
-        apiKey: primaryApiKey,
-        vertexApiKey: env.VERTEX_API_KEY,
-        providerPreference,
-        requestId,
-        model: attemptModel,
-        contents: [
-          {
-            parts: [{ text: POINTS_PROMPT }, ...imageParts],
-          },
-        ],
-        responseSchema: POINTS_RESPONSE_SCHEMA,
-      });
+      const result =
+        provider === PROVIDER_GEMINI
+          ? await callGeminiJson({
+              apiKey: primaryApiKey as string,
+              vertexApiKey: env.VERTEX_API_KEY,
+              providerPreference,
+              requestId,
+              model: attemptModel,
+              contents: [
+                {
+                  parts: [{ text: POINTS_PROMPT }, ...imageParts],
+                },
+              ],
+              responseSchema: POINTS_RESPONSE_SCHEMA,
+            })
+          : await callOpenRouterJson({
+              apiKey: openRouterApiKey as string,
+              model: attemptModel,
+              requestId,
+              referer: env.OPENROUTER_SITE_URL,
+              appTitle: env.OPENROUTER_APP_TITLE || "The Chatter Analyst",
+              messageContent: [
+                {
+                  type: "text",
+                  text:
+                    `${POINTS_PROMPT}\n\n` +
+                    "FINAL OUTPUT REQUIREMENT: Return only one valid JSON object. No markdown, no explanation.",
+                },
+                ...pageImages.map((dataUri) => ({
+                  type: "image_url" as const,
+                  image_url: { url: dataUri },
+                })),
+              ],
+            });
 
       const validationError = validatePointsResult(result, pageImages.length);
       if (validationError) {
@@ -308,6 +380,7 @@ export async function onRequestPost(context: any): Promise<Response> {
         JSON.stringify({
           event: "points_request_success",
           requestId,
+          provider,
           requestedModel: model,
           resolvedModel: attemptModel,
           slides: Array.isArray(result?.slides) ? result.slides.length : null,
@@ -319,6 +392,7 @@ export async function onRequestPost(context: any): Promise<Response> {
           JSON.stringify({
             event: "points_model_fallback_success",
             requestId,
+            provider,
             requestedModel: model,
             resolvedModel: attemptModel,
           }),
@@ -330,12 +404,15 @@ export async function onRequestPost(context: any): Promise<Response> {
       const message = String(err?.message || "Unknown error");
       lastMessage = message;
 
-      const schemaConstraint = isSchemaConstraintError(message);
+      const schemaConstraint = isSchemaConstraintError(message) || isStructuredOutputError(message);
       const isRateLimited = isUpstreamRateLimit(message);
       const isOverload = isOverloadError(message);
-      const isImageProcessing = isImageProcessingError(message);
+      const isImageProcessing =
+        provider === PROVIDER_GEMINI
+          ? isImageProcessingError(message)
+          : message.toLowerCase().includes("image");
       const isTimeout = isTimeoutError(message);
-      const isLocationBlocked = isLocationUnsupportedError(message);
+      const isLocationBlocked = provider === PROVIDER_GEMINI && isLocationUnsupportedError(message);
       const isTransient = isUpstreamTransientError(message);
       const shouldFallback =
         hasFallback &&
@@ -351,6 +428,7 @@ export async function onRequestPost(context: any): Promise<Response> {
         JSON.stringify({
           event: "points_model_attempt_failure",
           requestId,
+          provider,
           model: attemptModel,
           hasFallback,
           schemaConstraint,
@@ -369,6 +447,7 @@ export async function onRequestPost(context: any): Promise<Response> {
 
       const details = {
         requestId,
+        provider,
         model: attemptModel,
       };
 
@@ -378,8 +457,8 @@ export async function onRequestPost(context: any): Promise<Response> {
           429,
           "RATE_LIMIT",
           retryAfterSeconds
-            ? `Gemini quota/rate limit reached. Retry in about ${retryAfterSeconds}s.`
-            : "Gemini quota/rate limit reached. Please retry shortly.",
+            ? `Upstream quota/rate limit reached. Retry in about ${retryAfterSeconds}s.`
+            : "Upstream quota/rate limit reached. Please retry shortly.",
           "UPSTREAM_RATE_LIMIT",
           details,
         );
@@ -399,7 +478,7 @@ export async function onRequestPost(context: any): Promise<Response> {
         return error(
           UPSTREAM_DEPENDENCY_STATUS,
           "UPSTREAM_ERROR",
-          "Gemini is temporarily overloaded. Please retry.",
+          "Upstream model/provider is temporarily overloaded. Please retry.",
           "UPSTREAM_OVERLOAD",
           details,
         );
@@ -409,7 +488,7 @@ export async function onRequestPost(context: any): Promise<Response> {
         return error(
           UPSTREAM_DEPENDENCY_STATUS,
           "UPSTREAM_ERROR",
-          "Gemini could not process one or more slide images for this chunk. Retrying may work.",
+          "Upstream model could not process one or more slide images for this chunk. Retrying may work.",
           "UPSTREAM_IMAGE_PROCESSING",
           details,
         );
@@ -439,7 +518,7 @@ export async function onRequestPost(context: any): Promise<Response> {
         return error(
           UPSTREAM_DEPENDENCY_STATUS,
           "UPSTREAM_ERROR",
-          "Gemini request failed upstream. Please retry.",
+          "Upstream request failed transiently. Please retry.",
           "UPSTREAM_TRANSIENT",
           details,
         );
@@ -460,6 +539,6 @@ export async function onRequestPost(context: any): Promise<Response> {
     "UPSTREAM_ERROR",
     `Presentation analysis failed: ${lastMessage}`,
     "UPSTREAM_FAILURE",
-    { requestId, model },
+    { requestId, provider, model },
   );
 }
