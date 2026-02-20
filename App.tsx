@@ -1393,6 +1393,7 @@ const App: React.FC = () => {
                     className="ml-2 rounded-lg border border-line bg-white px-3 py-1.5 text-sm text-ink"
                   >
                     <option value={ModelType.FLASH}>Gemini 2.5 Flash (Fast)</option>
+                    <option value={ModelType.FLASH_3}>Gemini 3 Flash (Balanced)</option>
                     <option value={ModelType.PRO}>Gemini 3 Pro (Deep)</option>
                   </select>
                 </label>

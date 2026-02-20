@@ -27,7 +27,7 @@ interface ModelHealth {
 
 const AI_STUDIO_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 const VERTEX_EXPRESS_API_BASE = "https://aiplatform.googleapis.com/v1beta1/publishers/google/models";
-const MODELS = ["gemini-2.5-flash", "gemini-3-pro-preview"] as const;
+const MODELS = ["gemini-2.5-flash", "gemini-3-flash-preview", "gemini-3-pro-preview"] as const;
 const REQUEST_TIMEOUT_MS = 15000;
 
 const json = (payload: unknown, status = 200): Response =>

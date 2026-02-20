@@ -103,5 +103,6 @@ export interface PointsAnalysisState {
 
 export enum ModelType {
   PRO = 'gemini-3-pro-preview',
+  FLASH_3 = 'gemini-3-flash-preview',
   FLASH = 'gemini-2.5-flash',
 }

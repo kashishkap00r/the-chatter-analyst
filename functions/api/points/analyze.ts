@@ -15,9 +15,10 @@ const MAX_BODY_BYTES = 25 * 1024 * 1024;
 const MAX_PAGES = 60;
 const MAX_TOTAL_IMAGE_CHARS = 20 * 1024 * 1024;
 const FLASH_MODEL = "gemini-2.5-flash";
+const FLASH_3_MODEL = "gemini-3-flash-preview";
 const PRO_MODEL = "gemini-3-pro-preview";
 const DEFAULT_MODEL = FLASH_MODEL;
-const ALLOWED_MODELS = new Set([FLASH_MODEL, PRO_MODEL]);
+const ALLOWED_MODELS = new Set([FLASH_MODEL, FLASH_3_MODEL, PRO_MODEL]);
 const IS_STRICT_VALIDATION: boolean = false;
 const UPSTREAM_DEPENDENCY_STATUS = 424;
 const VALIDATION_STATUS = 422;
@@ -106,6 +107,16 @@ const isUpstreamTransientError = (message: string): boolean =>
   message.includes("500") ||
   message.includes("502") ||
   message.includes("504");
+
+const getModelAttemptOrder = (requestedModel: string): string[] => {
+  if (requestedModel === FLASH_MODEL) {
+    return [FLASH_MODEL, FLASH_3_MODEL, PRO_MODEL];
+  }
+  if (requestedModel === FLASH_3_MODEL) {
+    return [FLASH_3_MODEL, FLASH_MODEL, PRO_MODEL];
+  }
+  return [PRO_MODEL, FLASH_3_MODEL, FLASH_MODEL];
+};
 
 const disallowedContextStart = /^(in this slide|this slide shows|the slide shows)\b/i;
 
@@ -252,7 +263,7 @@ export async function onRequestPost(context: any): Promise<Response> {
     }),
   );
 
-  const modelAttemptOrder = model === FLASH_MODEL ? [FLASH_MODEL, PRO_MODEL] : [PRO_MODEL, FLASH_MODEL];
+  const modelAttemptOrder = getModelAttemptOrder(model);
   let lastMessage = "Unknown error";
 
   for (let attemptIndex = 0; attemptIndex < modelAttemptOrder.length; attemptIndex++) {

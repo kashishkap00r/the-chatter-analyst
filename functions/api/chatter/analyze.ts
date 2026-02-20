@@ -14,9 +14,10 @@ interface Env {
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_TRANSCRIPT_CHARS = 800000;
 const FLASH_MODEL = "gemini-2.5-flash";
+const FLASH_3_MODEL = "gemini-3-flash-preview";
 const PRO_MODEL = "gemini-3-pro-preview";
 const DEFAULT_MODEL = FLASH_MODEL;
-const ALLOWED_MODELS = new Set([FLASH_MODEL, PRO_MODEL]);
+const ALLOWED_MODELS = new Set([FLASH_MODEL, FLASH_3_MODEL, PRO_MODEL]);
 const REQUIRED_QUOTES_COUNT = 20;
 const UPSTREAM_DEPENDENCY_STATUS = 424;
 const VALIDATION_STATUS = 422;
@@ -132,6 +133,16 @@ const normalizeCategory = (rawCategory: string): string => {
   return "Other Material";
 };
 
+const getModelAttemptOrder = (requestedModel: string): string[] => {
+  if (requestedModel === FLASH_MODEL) {
+    return [FLASH_MODEL, FLASH_3_MODEL, PRO_MODEL];
+  }
+  if (requestedModel === FLASH_3_MODEL) {
+    return [FLASH_3_MODEL, FLASH_MODEL, PRO_MODEL];
+  }
+  return [PRO_MODEL, FLASH_3_MODEL, FLASH_MODEL];
+};
+
 const validateChatterResult = (result: any): string | null => {
   if (!result || typeof result !== "object") {
     return "Gemini response is not a JSON object.";
@@ -228,7 +239,7 @@ export async function onRequestPost(context: any): Promise<Response> {
     return error(400, "BAD_REQUEST", "Field 'model' is invalid.", "INVALID_MODEL");
   }
 
-  const modelAttemptOrder = model === FLASH_MODEL ? [FLASH_MODEL, PRO_MODEL] : [model];
+  const modelAttemptOrder = getModelAttemptOrder(model);
   const providerPreference = normalizeGeminiProviderPreference(env?.GEMINI_PROVIDER);
   const inputText = `${CHATTER_PROMPT}\n\nINPUT TRANSCRIPT:\n${transcript.substring(0, MAX_TRANSCRIPT_CHARS)}`;
 
