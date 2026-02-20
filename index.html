@@ -4,36 +4,23 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Chatter Analyst</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Manrope:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
+      rel="preload"
+      href="/fonts/manrope-latin-wght-normal.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    >
+    <link
+      rel="preload"
+      href="/fonts/fraunces-latin-wght-normal.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    >
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script>
-      tailwind.config = {
-        theme: {
-          extend: {
-            colors: {
-              canvas: '#f7f6f3',
-              ink: '#1f2937',
-              brand: '#0f766e',
-              'brand-soft': '#ccfbf1',
-              line: '#e7e5e4',
-              stone: '#57534e',
-            },
-            boxShadow: {
-              panel: '0 16px 40px -26px rgba(15, 23, 42, 0.45)',
-            },
-            fontFamily: {
-              sans: ['Manrope', 'sans-serif'],
-              serif: ['Fraunces', 'serif'],
-            },
-          },
-        },
-      };
       if (window.pdfjsLib) {
         window.pdfjsLib.GlobalWorkerOptions.workerSrc =
           'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';

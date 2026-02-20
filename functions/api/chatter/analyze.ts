@@ -28,7 +28,7 @@ const OPENROUTER_BACKUP_MODEL = "qwen/qwen3-vl-235b-a22b-instruct";
 const DEFAULT_MODEL = FLASH_MODEL;
 const ALLOWED_MODELS = new Set([FLASH_MODEL, FLASH_3_MODEL, PRO_MODEL]);
 const OPENROUTER_ALLOWED_MODELS = new Set([OPENROUTER_PRIMARY_MODEL]);
-const REQUIRED_QUOTES_COUNT = 20;
+const MAX_QUOTES_COUNT = 20;
 const UPSTREAM_DEPENDENCY_STATUS = 424;
 const VALIDATION_STATUS = 422;
 const ALLOWED_CATEGORIES = new Set([
@@ -202,8 +202,12 @@ const validateChatterResult = (result: any): string | null => {
     return "Field 'quotes' must be an array.";
   }
 
-  if (result.quotes.length !== REQUIRED_QUOTES_COUNT) {
-    return `Field 'quotes' must contain exactly ${REQUIRED_QUOTES_COUNT} items, got ${result.quotes.length}.`;
+  if (result.quotes.length < 1) {
+    return "Field 'quotes' must contain at least 1 item.";
+  }
+
+  if (result.quotes.length > MAX_QUOTES_COUNT) {
+    return `Field 'quotes' must contain at most ${MAX_QUOTES_COUNT} items, got ${result.quotes.length}.`;
   }
 
   for (let i = 0; i < result.quotes.length; i++) {

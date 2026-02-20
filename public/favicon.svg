@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Chatter Analyst">
+  <rect x="4" y="4" width="56" height="56" rx="12" fill="#0f766e" />
+  <text
+    x="32"
+    y="42"
+    text-anchor="middle"
+    fill="#ffffff"
+    font-family="Georgia, serif"
+    font-size="34"
+    font-weight="700"
+  >
+    C
+  </text>
+</svg>

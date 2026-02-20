@@ -96,12 +96,13 @@ CORE MISSION
 2. Identify the NSE trading scrip used in Zerodha URLs (for example, SBIN, RELIANCE, HDFCBANK).
 3. Determine market cap category and industry as shown on Zerodha stock pages.
 4. Provide a concise factual 2-sentence company description.
-5. Extract exactly twenty management quotes that are materially important to investors.
+5. Extract high-signal management quotes that are materially important to investors.
+   - Target 8 to 20 quotes.
+   - Return fewer than 8 only when genuinely high-signal material is limited.
+   - Never return more than 20 quotes.
 6. Coverage target (balanced soft):
-   - At least 6 quotes from prepared remarks/business update section.
-   - At least 6 quotes from management answers during Q&A.
-   - Remaining 8 quotes from best available material across either section.
-   - If Q&A material is thin, backfill from prepared remarks while still returning exactly 20 quotes.
+   - Represent both prepared remarks/business update section and management answers during Q&A when both are available.
+   - Do not force fixed section quotas if transcript quality differs across sections.
 7. Use transcript page markers (for example, "--- Page 12 ---") and avoid taking all quotes only from early pages.
    Prefer spread across early/middle/late pages whenever material exists.
 8. For each quote, provide:
@@ -112,6 +113,9 @@ CORE MISSION
 QUOTE QUALITY RULES
 - Use only management remarks (do not include analyst questions as quotes).
 - Prefer high-signal statements: guidance, demand trends, margins/profitability, capex/allocation, risks, competitive or regulatory shifts.
+- Prioritize comments that explain structural change, strategic direction, industry shifts, or longer-term business implications.
+- De-prioritize routine quarter updates that only report numbers without explanatory insight.
+- Include business-update quotes only when they add meaningful forward-looking context or management conviction.
 - Avoid repetitive quotes that convey the same point.
 - Preserve original wording; do not paraphrase inside quote.
 
@@ -124,11 +128,11 @@ SUMMARY LANGUAGE RULES
 OUTPUT RULES
 - Use market cap labels like Large Cap, Mid Cap, Small Cap, or Micro Cap.
 - nseScrip must be uppercase with only A-Z and 0-9 characters.
-- quotes must contain exactly 20 items (not fewer, not more).
+- quotes must not exceed 20 items.
 - Return valid JSON only.
 
 SELF-CHECK BEFORE FINALIZING
-- Confirm quotes length is exactly 20.
+- Confirm quote count is at most 20, and target at least 8 when sufficient high-signal material exists.
 - Confirm both prepared remarks and Q&A answers are represented where available.
 - Confirm output is valid JSON with all required fields.
 `.trim();
