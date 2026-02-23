@@ -43,6 +43,48 @@ export interface ChatterAnalysisResult {
   quotes: ExtractedQuote[];
 }
 
+export interface ThreadQuoteCandidate {
+  id: string;
+  companyName: string;
+  marketCapCategory: string;
+  industry: string;
+  companyDescription: string;
+  summary: string;
+  quote: string;
+  speakerName: string;
+  speakerDesignation: string;
+  sourceOrder: number;
+}
+
+export interface ThreadCompanyGroup {
+  companyName: string;
+  marketCapCategory: string;
+  industry: string;
+  companyDescription: string;
+  quotes: ThreadQuoteCandidate[];
+}
+
+export interface ThreadEditionSource {
+  editionTitle: string;
+  editionUrl?: string;
+  editionDate?: string;
+  companiesCovered?: number;
+  industriesCovered?: number;
+  sourceKind: 'substack_url' | 'pdf_text';
+  companies: ThreadCompanyGroup[];
+}
+
+export interface ThreadInsightTweet {
+  quoteId: string;
+  tweet: string;
+}
+
+export interface ThreadDraftResult {
+  introTweet: string;
+  insightTweets: ThreadInsightTweet[];
+  outroTweet: string;
+}
+
 export interface ChatterAnalysisState {
   status: 'idle' | 'analyzing' | 'complete' | 'error';
   result?: ChatterAnalysisResult;

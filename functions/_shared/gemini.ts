@@ -87,6 +87,34 @@ export const POINTS_RESPONSE_SCHEMA = {
   ],
 };
 
+export const THREAD_DRAFT_RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    introTweet: { type: "STRING" },
+    insightTweets: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          quoteId: { type: "STRING" },
+          tweet: { type: "STRING" },
+        },
+        required: ["quoteId", "tweet"],
+      },
+    },
+    outroTweet: { type: "STRING" },
+  },
+  required: ["introTweet", "insightTweets", "outroTweet"],
+};
+
+export const THREAD_REGENERATE_RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    tweet: { type: "STRING" },
+  },
+  required: ["tweet"],
+};
+
 export const CHATTER_PROMPT = `
 ROLE & AUDIENCE
 You are a research analyst for "The Chatter | India Edition," a bi-weekly newsletter read by portfolio managers.
@@ -149,31 +177,103 @@ CORE MISSION
 5. Select the most insightful presentation slides with longer-term implications for the business/industry.
 
 SLIDE SELECTION RULES
-- Prioritize strategic signal over quarterly noise.
+- Prioritize strategic signal and novelty over quarterly noise.
+- Strict novelty-first: prefer slides that reveal something non-obvious, new, or structurally important versus standard recurring updates.
 - Favor slides that reveal industry structure, durable demand/supply shifts, capital allocation, M&A, product mix change, moat/competition, unit economics, regulatory change, or management strategy pivot.
-- Avoid generic update slides that only restate routine quarterly revenue/profit movement without structural insight.
+- De-prioritize generic slides likely repeated every quarter unless this quarter shows a meaningful inflection.
 - Ignore cover pages, ESG slogans, awards, org charts, photo-heavy pages with little analytical value.
 - Target at least 3 slides when enough quality material exists; return fewer only if the deck has limited high-signal content.
-- No upper cap on slide count.
+- Return at most 10 slides.
 
 SLIDE OUTPUT FORMAT
 - For each selected slide, return:
   a) selectedPageNumber (1-indexed local page number within the provided request images, not full-deck absolute page)
-  b) context: one insight-first paragraph with this structure:
-     - Start directly with what has changed or what stands out in the slide data.
-     - Include 2-3 concrete observations from the slide (mix, trend, comparison, composition shift, concentration, etc.).
-     - End with one investor implication sentence (what this means for business quality, risk, growth durability, margins, or industry structure).
+  b) context: one concise insight-first paragraph (ideally 2 sentences):
+     - Sentence 1: explain the hidden signal, likely driver, or read-between-the-lines interpretation.
+     - Sentence 2: explain investor implication (quality of growth, risk, durability, margins, strategy, or industry structure).
 
 CONTEXT QUALITY RULES
+- Do not narrate obvious visual content that the reader can already see.
 - Do not explain how to read the chart/table.
 - Do not start context with phrases like "In this slide", "This slide shows", or "The slide shows".
 - Avoid vague narration; include concrete directionality or mix shift wherever visible (for example, share increase/decrease by segment).
+- If a financial/result slide is selected, explicitly justify why it is included now (what changed beneath headline numbers and why that matters).
+- Keep language simple, clear, and concise.
+
+BAD VS GOOD EXAMPLES
+- Bad: "This slide shows segment revenue growth and margin trends across business lines."
+- Good: "Margin expansion despite slower headline growth suggests mix is moving toward higher-value products, not just cyclical demand support. If sustained, this points to better earnings quality and lower downside in a softer cycle."
+- Bad: "The chart presents loan book composition by product."
+- Good: "A rising share of unsecured/micro-ticket lending usually signals a push for yield and faster growth, but it also raises sensitivity to credit stress later in the cycle. That trade-off is central to judging whether current growth is durable."
 
 OUTPUT RULES
 - Return one JSON object with companyName, fiscalPeriod, nseScrip, marketCapCategory, industry, companyDescription, and slides.
 - nseScrip must be uppercase and contain only A-Z and 0-9.
 - Use market cap labels like Large Cap, Mid Cap, Small Cap, or Micro Cap.
 - Return valid JSON only.
+`.trim();
+
+export const THREAD_DRAFT_PROMPT = `
+ROLE
+You are writing an X (Twitter) thread for "The Chatter" edition in a crisp, witty, investor-aware voice.
+
+GOAL
+- Produce thread-ready text from selected quotes.
+- Write a dynamic intro tweet, one insight tweet per selected quote, and a dynamic outro tweet.
+
+VOICE & STYLE
+- Crisp + witty, but still professional and clear.
+- No jargon-heavy wording.
+- No emojis.
+- Avoid hashtags unless absolutely necessary.
+- Keep each tweet readable in one glance.
+
+INSIGHT TWEET RULES
+- Exactly one insight tweet per selected quoteId.
+- Each insight tweet must be 1 or 2 short lines.
+- Explain the signal (what changed / why it matters), not generic quarter updates.
+- Do not repeat phrasing across tweets.
+- Keep under 260 characters per tweet.
+- Do not include quote marks in the tweet line itself.
+
+INTRO RULES
+- Hook the reader with edition-level context.
+- Mention this is from The Chatter and companies are discussing important shifts.
+- Keep under 260 characters.
+
+OUTRO RULES
+- End with a clear CTA to read the full edition.
+- If editionUrl is present in input, naturally include it in the outro text.
+- Keep under 260 characters.
+
+OUTPUT RULES
+- Return strict JSON only.
+- insightTweets must contain every quoteId exactly once.
+`.trim();
+
+export const THREAD_REGENERATE_PROMPT = `
+ROLE
+You rewrite one X (Twitter) thread line for The Chatter in a crisp, witty, investor-aware voice.
+
+GOAL
+- Regenerate only the target tweet.
+- Keep it distinct from already used thread lines.
+
+STYLE
+- 1 to 2 short lines.
+- Clear, simple English.
+- No emojis.
+- Avoid hashtags unless necessary.
+- Keep under 260 characters.
+- Do not use quote marks.
+
+QUALITY BAR
+- Focus on investor signal, not generic quarter commentary.
+- Do not repeat openings or key phrases from usedTweetTexts.
+- Keep tone sharp but factual.
+
+OUTPUT
+- Return strict JSON only with: { "tweet": "..." }.
 `.trim();
 
 const parseGeminiText = (payload: any): string => {

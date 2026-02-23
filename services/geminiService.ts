@@ -5,10 +5,16 @@ import {
   ProgressEvent,
   ProviderType,
   SelectedSlide,
+  ThreadDraftResult,
+  ThreadEditionSource,
+  ThreadQuoteCandidate,
 } from "../types";
 
 const CHATTER_ANALYZE_ENDPOINT = "/api/chatter/analyze";
 const POINTS_ANALYZE_ENDPOINT = "/api/points/analyze";
+const CHATTER_THREAD_INGEST_ENDPOINT = "/api/chatter/thread/ingest";
+const CHATTER_THREAD_GENERATE_ENDPOINT = "/api/chatter/thread/generate";
+const CHATTER_THREAD_REGENERATE_ENDPOINT = "/api/chatter/thread/regenerate";
 
 interface ApiErrorPayload {
   error?: {
@@ -34,6 +40,17 @@ interface PointsAnalyzeApiResult {
   companyDescription: string;
   zerodhaStockUrl?: string;
   slides: PointsAnalyzeApiSlide[];
+}
+
+interface ThreadGenerateInsightApiItem {
+  quoteId: string;
+  tweet: string;
+}
+
+interface ThreadGenerateApiResult {
+  introTweet: string;
+  insightTweets: ThreadGenerateInsightApiItem[];
+  outroTweet: string;
 }
 
 interface PdfImageConversionOptions {
@@ -457,4 +474,98 @@ export const analyzePresentation = async (
     zerodhaStockUrl: result.zerodhaStockUrl,
     slides: sortedSlides,
   };
+};
+
+export const ingestThreadEditionFromSubstackUrl = async (
+  substackUrl: string,
+): Promise<ThreadEditionSource> => {
+  if (!substackUrl.trim()) {
+    throw new Error("Substack URL is required.");
+  }
+
+  return postJson<ThreadEditionSource>(CHATTER_THREAD_INGEST_ENDPOINT, {
+    substackUrl: substackUrl.trim(),
+  });
+};
+
+export const ingestThreadEditionFromText = async (
+  editionText: string,
+): Promise<ThreadEditionSource> => {
+  if (!editionText.trim()) {
+    throw new Error("Edition text is required.");
+  }
+
+  return postJson<ThreadEditionSource>(CHATTER_THREAD_INGEST_ENDPOINT, {
+    editionText: editionText.trim(),
+  });
+};
+
+export const generateThreadDraft = async (
+  selectedQuotes: ThreadQuoteCandidate[],
+  editionMetadata: {
+    editionTitle: string;
+    editionUrl?: string;
+    editionDate?: string;
+    companiesCovered?: number;
+    industriesCovered?: number;
+  },
+  provider: ProviderType = ProviderType.GEMINI,
+  modelId: ModelType = ModelType.FLASH,
+): Promise<ThreadDraftResult> => {
+  if (!Array.isArray(selectedQuotes) || selectedQuotes.length === 0) {
+    throw new Error("Select at least one quote to generate the thread.");
+  }
+
+  const result = await postJson<ThreadGenerateApiResult>(CHATTER_THREAD_GENERATE_ENDPOINT, {
+    provider,
+    model: modelId,
+    selectedQuotes,
+    editionMetadata,
+  });
+
+  if (!Array.isArray(result.insightTweets) || !result.introTweet || !result.outroTweet) {
+    throw new Error("Thread generation returned an invalid payload.");
+  }
+
+  return {
+    introTweet: result.introTweet,
+    insightTweets: result.insightTweets.map((item) => ({
+      quoteId: item.quoteId,
+      tweet: item.tweet,
+    })),
+    outroTweet: result.outroTweet,
+  };
+};
+
+export const regenerateThreadTweet = async (params: {
+  tweetKind: "intro" | "insight" | "outro";
+  currentTweet: string;
+  usedTweetTexts: string[];
+  editionMetadata: {
+    editionTitle: string;
+    editionUrl?: string;
+    editionDate?: string;
+  };
+  targetQuote?: ThreadQuoteCandidate;
+  provider?: ProviderType;
+  modelId?: ModelType;
+}): Promise<string> => {
+  const provider = params.provider ?? ProviderType.GEMINI;
+  const modelId = params.modelId ?? ModelType.FLASH;
+
+  const result = await postJson<{ tweet: string }>(CHATTER_THREAD_REGENERATE_ENDPOINT, {
+    provider,
+    model: modelId,
+    tweetKind: params.tweetKind,
+    currentTweet: params.currentTweet,
+    usedTweetTexts: params.usedTweetTexts,
+    editionMetadata: params.editionMetadata,
+    targetQuote: params.targetQuote,
+  });
+
+  if (!result?.tweet || typeof result.tweet !== "string") {
+    throw new Error("Regenerated tweet is empty.");
+  }
+
+  return result.tweet;
 };

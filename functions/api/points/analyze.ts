@@ -32,6 +32,28 @@ const OPENROUTER_ALLOWED_MODELS = new Set([OPENROUTER_PRIMARY_MODEL]);
 const IS_STRICT_VALIDATION: boolean = false;
 const UPSTREAM_DEPENDENCY_STATUS = 424;
 const VALIDATION_STATUS = 422;
+const MAX_SELECTED_SLIDES = 10;
+const MAX_CONTEXT_SENTENCES = 2;
+const MAX_CONTEXT_CHARACTERS = 420;
+const MAX_CONTEXT_REWRITE_CANDIDATES = 6;
+
+const POINTS_CONTEXT_REWRITE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    rewrites: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          selectedPageNumber: { type: "INTEGER" },
+          context: { type: "STRING" },
+        },
+        required: ["selectedPageNumber", "context"],
+      },
+    },
+  },
+  required: ["rewrites"],
+};
 
 interface ChunkRange {
   startPage: number;
@@ -172,6 +194,352 @@ const sanitizeContext = (value: string): string => {
   return normalized;
 };
 
+const STOP_WORDS = new Set([
+  "this",
+  "that",
+  "with",
+  "from",
+  "there",
+  "their",
+  "which",
+  "while",
+  "have",
+  "has",
+  "were",
+  "been",
+  "being",
+  "into",
+  "about",
+  "across",
+  "under",
+  "after",
+  "before",
+  "where",
+  "what",
+  "when",
+  "over",
+  "only",
+  "also",
+  "than",
+  "then",
+  "because",
+  "would",
+  "could",
+  "should",
+  "company",
+  "business",
+  "shows",
+  "slide",
+  "table",
+  "chart",
+  "graph",
+]);
+
+const DESCRIPTIVE_TERMS = [
+  "this slide",
+  "the slide",
+  "chart shows",
+  "table shows",
+  "graph shows",
+  "illustrates",
+  "depicts",
+  "presents",
+  "breakup",
+  "composition",
+  "distribution",
+  "lists",
+  "highlights",
+];
+
+const INFERENCE_TERMS = [
+  "because",
+  "driven by",
+  "reflects",
+  "implies",
+  "suggests",
+  "indicates",
+  "points to",
+  "signals",
+  "underscores",
+  "therefore",
+  "as a result",
+  "which means",
+  "hinting",
+  "read-through",
+  "read through",
+  "sets up",
+];
+
+const NOVELTY_TERMS = [
+  "new",
+  "first",
+  "pivot",
+  "shift",
+  "inflection",
+  "structural",
+  "turning point",
+  "mix shift",
+  "mix upgrade",
+  "repricing",
+  "consolidation",
+  "acquisition",
+  "divestment",
+  "capacity addition",
+  "utilization",
+  "pricing power",
+  "runway",
+  "transition",
+  "reposition",
+  "emerging",
+];
+
+const ROUTINE_TERMS = [
+  "yoy",
+  "qoq",
+  "quarter",
+  "revenue",
+  "ebitda",
+  "pat",
+  "profit",
+  "gross margin",
+  "operating margin",
+  "growth",
+  "guidance",
+];
+
+const FINANCIAL_TERMS = [
+  "revenue",
+  "ebitda",
+  "pat",
+  "profit",
+  "margin",
+  "operating leverage",
+  "nim",
+  "roa",
+  "roe",
+  "credit cost",
+  "cost to income",
+  "gnpa",
+  "nnpa",
+  "volume",
+];
+
+interface SlideEntry {
+  selectedPageNumber: number;
+  context: string;
+}
+
+interface ContextRewriteCandidate {
+  selectedPageNumber: number;
+  context: string;
+  reason: string;
+  qualityScore: number;
+}
+
+interface ContextRewriteResult {
+  rewrites: Array<{
+    selectedPageNumber: number;
+    context: string;
+  }>;
+}
+
+const splitSentences = (value: string): string[] =>
+  value
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length > 0);
+
+const countTermHits = (lowerText: string, terms: string[]): number =>
+  terms.reduce((total, term) => total + (lowerText.includes(term) ? 1 : 0), 0);
+
+const ensureSentenceEnding = (value: string): string => {
+  if (!value) return value;
+  return /[.!?]$/.test(value) ? value : `${value}.`;
+};
+
+const clampContextLength = (value: string): string => {
+  const sentences = splitSentences(value);
+  if (sentences.length === 0) return value;
+  const chosen = sentences.slice(0, MAX_CONTEXT_SENTENCES).map(ensureSentenceEnding).join(" ");
+  if (chosen.length <= MAX_CONTEXT_CHARACTERS) {
+    return chosen;
+  }
+  return `${chosen.slice(0, MAX_CONTEXT_CHARACTERS - 1).trimEnd()}…`;
+};
+
+const containsFinancialLanguage = (value: string): boolean => {
+  const lower = value.toLowerCase();
+  return countTermHits(lower, FINANCIAL_TERMS) > 0;
+};
+
+const contextNeedsRewrite = (value: string): { needsRewrite: boolean; reason: string } => {
+  const lower = value.toLowerCase();
+  const descriptiveHits = countTermHits(lower, DESCRIPTIVE_TERMS);
+  const inferenceHits = countTermHits(lower, INFERENCE_TERMS);
+  const financialHits = countTermHits(lower, FINANCIAL_TERMS);
+  const sentenceCount = splitSentences(value).length;
+  const startsDescriptive = /^(this|the)\s+(slide|chart|table|graph)\b/i.test(value.trim());
+
+  if (startsDescriptive || (descriptiveHits >= 2 && inferenceHits === 0)) {
+    return { needsRewrite: true, reason: "descriptive_only" };
+  }
+
+  if (sentenceCount > MAX_CONTEXT_SENTENCES + 1 || value.length > MAX_CONTEXT_CHARACTERS) {
+    return { needsRewrite: true, reason: "too_verbose" };
+  }
+
+  if (financialHits > 0 && inferenceHits === 0) {
+    return { needsRewrite: true, reason: "financial_without_why" };
+  }
+
+  return { needsRewrite: false, reason: "ok" };
+};
+
+const scoreContextQuality = (value: string): number => {
+  const lower = value.toLowerCase();
+  const inferenceHits = countTermHits(lower, INFERENCE_TERMS);
+  const noveltyHits = countTermHits(lower, NOVELTY_TERMS);
+  const descriptiveHits = countTermHits(lower, DESCRIPTIVE_TERMS);
+  const routineHits = countTermHits(lower, ROUTINE_TERMS);
+  const sentencePenalty = Math.max(0, splitSentences(value).length - MAX_CONTEXT_SENTENCES);
+  const financialPenalty = containsFinancialLanguage(value) && inferenceHits === 0 ? 2 : 0;
+
+  return (
+    inferenceHits * 3 +
+    noveltyHits * 2 -
+    descriptiveHits * 2 -
+    routineHits -
+    sentencePenalty -
+    financialPenalty
+  );
+};
+
+const toTokenSet = (value: string): Set<string> => {
+  const tokens = value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((token) => token.length >= 4 && !STOP_WORDS.has(token));
+
+  return new Set(tokens);
+};
+
+const jaccardSimilarity = (left: Set<string>, right: Set<string>): number => {
+  if (left.size === 0 || right.size === 0) return 0;
+  let intersection = 0;
+  for (const token of left) {
+    if (right.has(token)) {
+      intersection += 1;
+    }
+  }
+  const union = left.size + right.size - intersection;
+  return union === 0 ? 0 : intersection / union;
+};
+
+const areContextsNearDuplicate = (left: string, right: string): boolean => {
+  const leftSet = toTokenSet(left);
+  const rightSet = toTokenSet(right);
+  return jaccardSimilarity(leftSet, rightSet) >= 0.68;
+};
+
+const buildRewritePrompt = (
+  candidates: ContextRewriteCandidate[],
+  companyName: string,
+  industry: string,
+): string => {
+  const payload = candidates.map((item) => ({
+    selectedPageNumber: item.selectedPageNumber,
+    context: item.context,
+    rewriteReason: item.reason,
+  }));
+
+  return [
+    "You are rewriting slide context for a portfolio-manager audience.",
+    `Company: ${companyName || "Unknown"}`,
+    `Industry: ${industry || "Unknown"}`,
+    "",
+    "Rewrite each context to be insight-first, concise, and not descriptive.",
+    "Rules:",
+    "- Keep each context to exactly 2 short sentences where possible.",
+    "- Sentence 1: hidden signal, likely driver, or read-between-the-lines interpretation.",
+    "- Sentence 2: investor implication (durability, risk, margins, strategy, or industry structure).",
+    "- Do not narrate obvious visuals from the slide.",
+    "- If context is financial/result oriented, clearly explain why it matters now beyond headline numbers.",
+    "",
+    "Return JSON only with: { \"rewrites\": [{ \"selectedPageNumber\": number, \"context\": string }] }",
+    "Return one rewrite for each input selectedPageNumber.",
+    "",
+    `INPUT: ${JSON.stringify(payload)}`,
+  ].join("\n");
+};
+
+const normalizeRewritePayload = (value: any): ContextRewriteResult => {
+  if (!value || typeof value !== "object" || !Array.isArray(value.rewrites)) {
+    return { rewrites: [] };
+  }
+
+  const rewrites = value.rewrites
+    .filter((item: any) => item && Number.isInteger(item.selectedPageNumber) && hasNonEmptyString(item.context))
+    .map((item: any) => ({
+      selectedPageNumber: Number(item.selectedPageNumber),
+      context: sanitizeContext(clampContextLength(item.context)),
+    }));
+
+  return { rewrites };
+};
+
+const selectBestSlides = (slides: SlideEntry[]): SlideEntry[] => {
+  const dedupByPage = new Map<number, SlideEntry>();
+  for (const slide of slides) {
+    const existing = dedupByPage.get(slide.selectedPageNumber);
+    if (!existing) {
+      dedupByPage.set(slide.selectedPageNumber, slide);
+      continue;
+    }
+    if (scoreContextQuality(slide.context) > scoreContextQuality(existing.context)) {
+      dedupByPage.set(slide.selectedPageNumber, slide);
+    }
+  }
+
+  const scored = Array.from(dedupByPage.values()).map((slide, index) => ({
+    slide,
+    index,
+    score: scoreContextQuality(slide.context),
+  }));
+
+  scored.sort((left, right) => {
+    if (right.score !== left.score) return right.score - left.score;
+    return left.slide.selectedPageNumber - right.slide.selectedPageNumber;
+  });
+
+  const selected: Array<{ slide: SlideEntry; score: number }> = [];
+  for (const candidate of scored) {
+    if (selected.some((entry) => areContextsNearDuplicate(entry.slide.context, candidate.slide.context))) {
+      continue;
+    }
+    selected.push({ slide: candidate.slide, score: candidate.score });
+    if (selected.length >= MAX_SELECTED_SLIDES) {
+      break;
+    }
+  }
+
+  if (selected.length < Math.min(MAX_SELECTED_SLIDES, scored.length)) {
+    for (const candidate of scored) {
+      if (selected.some((entry) => entry.slide.selectedPageNumber === candidate.slide.selectedPageNumber)) {
+        continue;
+      }
+      selected.push({ slide: candidate.slide, score: candidate.score });
+      if (selected.length >= MAX_SELECTED_SLIDES) {
+        break;
+      }
+    }
+  }
+
+  return selected
+    .map((entry) => entry.slide)
+    .sort((left, right) => left.selectedPageNumber - right.selectedPageNumber);
+};
+
 const parseChunkRange = (
   rawStartPage: unknown,
   rawEndPage: unknown,
@@ -221,12 +589,14 @@ const buildPointsPrompt = (chunkPageCount: number, chunkRange: ChunkRange | null
           "REQUEST PAGE WINDOW",
           `- You are seeing a page chunk in this request with exactly ${chunkPageCount} images.`,
           `- selectedPageNumber MUST be local to this chunk: 1 to ${chunkPageCount}.`,
+          `- Return no more than ${MAX_SELECTED_SLIDES} slides in this response.`,
         ]
       : [
           "REQUEST PAGE WINDOW",
           `- You are seeing only a chunk of the full deck: absolute pages ${chunkRange.startPage}-${chunkRange.endPage}.`,
           `- selectedPageNumber MUST be local to this chunk: 1 to ${chunkPageCount} (not absolute deck page).`,
           `- Mapping: local page 1 = absolute page ${chunkRange.startPage}; local page ${chunkPageCount} = absolute page ${chunkRange.endPage}.`,
+          `- Return no more than ${MAX_SELECTED_SLIDES} slides in this response.`,
         ];
 
   return `${POINTS_PROMPT}\n\n${chunkGuidance.join("\n")}`;
@@ -337,6 +707,133 @@ const extractBase64 = (dataUri: string): string => {
     return dataUri.slice(commaIndex + 1);
   }
   return dataUri;
+};
+
+const applyContextRewriteIfNeeded = async (params: {
+  provider: string;
+  requestId: string;
+  model: string;
+  providerPreference?: ReturnType<typeof normalizeGeminiProviderPreference>;
+  geminiApiKey?: string;
+  vertexApiKey?: string;
+  openRouterApiKey?: string;
+  openRouterSiteUrl?: string;
+  openRouterAppTitle?: string;
+  companyName: string;
+  industry: string;
+  slides: SlideEntry[];
+}): Promise<{ slides: SlideEntry[]; rewriteAppliedCount: number }> => {
+  const {
+    provider,
+    requestId,
+    model,
+    providerPreference,
+    geminiApiKey,
+    vertexApiKey,
+    openRouterApiKey,
+    openRouterSiteUrl,
+    openRouterAppTitle,
+    companyName,
+    industry,
+    slides,
+  } = params;
+
+  const candidates: ContextRewriteCandidate[] = slides
+    .map((slide) => {
+      const check = contextNeedsRewrite(slide.context);
+      return {
+        selectedPageNumber: slide.selectedPageNumber,
+        context: slide.context,
+        reason: check.reason,
+        qualityScore: scoreContextQuality(slide.context),
+        needsRewrite: check.needsRewrite,
+      };
+    })
+    .filter((item) => item.needsRewrite)
+    .sort((left, right) => left.qualityScore - right.qualityScore)
+    .slice(0, MAX_CONTEXT_REWRITE_CANDIDATES)
+    .map((item) => ({
+      selectedPageNumber: item.selectedPageNumber,
+      context: item.context,
+      reason: item.reason,
+      qualityScore: item.qualityScore,
+    }));
+
+  if (candidates.length === 0) {
+    return { slides, rewriteAppliedCount: 0 };
+  }
+
+  const rewritePrompt = buildRewritePrompt(candidates, companyName, industry);
+  let rewriteRaw: any;
+  try {
+    rewriteRaw =
+      provider === PROVIDER_GEMINI
+        ? await callGeminiJson({
+            apiKey: geminiApiKey as string,
+            vertexApiKey,
+            providerPreference,
+            requestId,
+            model,
+            contents: [{ parts: [{ text: rewritePrompt }] }],
+            responseSchema: POINTS_CONTEXT_REWRITE_SCHEMA,
+          })
+        : await callOpenRouterJson({
+            apiKey: openRouterApiKey as string,
+            model,
+            requestId,
+            referer: openRouterSiteUrl,
+            appTitle: openRouterAppTitle || "The Chatter Analyst",
+            messageContent: rewritePrompt,
+          });
+  } catch (rewriteError: any) {
+    console.log(
+      JSON.stringify({
+        event: "points_context_rewrite_failed",
+        requestId,
+        model,
+        provider,
+        candidateCount: candidates.length,
+        message: String(rewriteError?.message || "Unknown rewrite failure"),
+      }),
+    );
+    return { slides, rewriteAppliedCount: 0 };
+  }
+
+  const rewritePayload = normalizeRewritePayload(rewriteRaw);
+  if (!Array.isArray(rewritePayload.rewrites) || rewritePayload.rewrites.length === 0) {
+    return { slides, rewriteAppliedCount: 0 };
+  }
+
+  const rewriteByPage = new Map<number, string>();
+  for (const rewrite of rewritePayload.rewrites) {
+    rewriteByPage.set(rewrite.selectedPageNumber, rewrite.context);
+  }
+
+  let rewriteAppliedCount = 0;
+  const rewrittenSlides = slides.map((slide) => {
+    const candidateRewrite = rewriteByPage.get(slide.selectedPageNumber);
+    if (!candidateRewrite) {
+      return slide;
+    }
+
+    const previousScore = scoreContextQuality(slide.context);
+    const nextScore = scoreContextQuality(candidateRewrite);
+    const nextCheck = contextNeedsRewrite(candidateRewrite);
+    if (!nextCheck.needsRewrite || nextScore >= previousScore) {
+      rewriteAppliedCount += 1;
+      return {
+        ...slide,
+        context: candidateRewrite,
+      };
+    }
+
+    return slide;
+  });
+
+  return {
+    slides: rewrittenSlides,
+    rewriteAppliedCount,
+  };
 };
 
 export async function onRequestPost(context: any): Promise<Response> {
@@ -507,6 +1004,52 @@ export async function onRequestPost(context: any): Promise<Response> {
         );
       }
 
+      const initialSlides: SlideEntry[] = (Array.isArray(result?.slides) ? result.slides : [])
+        .filter((slide: any) => slide && Number.isInteger(slide.selectedPageNumber) && hasNonEmptyString(slide.context))
+        .map((slide: any) => ({
+          selectedPageNumber: Number(slide.selectedPageNumber),
+          context: clampContextLength(sanitizeContext(slide.context)),
+        }));
+
+      const rewriteOutcome = await applyContextRewriteIfNeeded({
+        provider,
+        requestId,
+        model: attemptModel,
+        providerPreference,
+        geminiApiKey: primaryApiKey,
+        vertexApiKey: env.VERTEX_API_KEY,
+        openRouterApiKey,
+        openRouterSiteUrl: env.OPENROUTER_SITE_URL,
+        openRouterAppTitle: env.OPENROUTER_APP_TITLE,
+        companyName: hasNonEmptyString(result?.companyName) ? result.companyName : "",
+        industry: hasNonEmptyString(result?.industry) ? result.industry : "",
+        slides: initialSlides,
+      });
+
+      const selectedSlides = selectBestSlides(
+        rewriteOutcome.slides.map((slide) => ({
+          selectedPageNumber: slide.selectedPageNumber,
+          context: clampContextLength(sanitizeContext(slide.context)),
+        })),
+      );
+
+      if (selectedSlides.length === 0) {
+        return error(
+          VALIDATION_STATUS,
+          "UPSTREAM_ERROR",
+          "Presentation analysis returned no usable slides after quality filtering.",
+          "VALIDATION_FAILED",
+          {
+            requestId,
+            model: attemptModel,
+            initialSlides: initialSlides.length,
+            rewriteAppliedCount: rewriteOutcome.rewriteAppliedCount,
+          },
+        );
+      }
+
+      result.slides = selectedSlides;
+
       console.log(
         JSON.stringify({
           event: "points_request_success",
@@ -514,7 +1057,9 @@ export async function onRequestPost(context: any): Promise<Response> {
           provider,
           requestedModel: model,
           resolvedModel: attemptModel,
-          slides: Array.isArray(result?.slides) ? result.slides.length : null,
+          slides: selectedSlides.length,
+          initialSlides: initialSlides.length,
+          rewriteAppliedCount: rewriteOutcome.rewriteAppliedCount,
           normalizedPageCount: validation.normalizedPageCount,
           chunkStartPage: chunkRange?.startPage ?? null,
           chunkEndPage: chunkRange?.endPage ?? null,

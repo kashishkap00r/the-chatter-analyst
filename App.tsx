@@ -21,6 +21,7 @@ import {
 import QuoteCard from './components/QuoteCard';
 import PointsCard from './components/PointsCard';
 import AnalysisProgressPanel from './components/AnalysisProgressPanel';
+import ThreadComposer from './components/ThreadComposer';
 import { buildChatterClipboardExport } from './utils/chatterCopyExport';
 import { buildPointsClipboardExport } from './utils/pointsCopyExport';
 import {
@@ -1499,6 +1500,8 @@ const App: React.FC = () => {
 
   const renderChatterResults = () => (
     <section className="lg:col-span-7 space-y-6">
+      <ThreadComposer provider={provider} model={selectedChatterModel} disabled={isResumeDecisionPending} />
+
       {completedResults.length > 0 && (
         <div className="rounded-2xl border border-line bg-white shadow-panel p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <p className="text-sm text-stone">
