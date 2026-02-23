@@ -10,6 +10,7 @@ const BRAND_DARK = "#424242";
 const CANVAS_WHITE = "#FFFFFF";
 const SOFT_BG = "#F5F7FB";
 const STROKE = "#D5DDEB";
+const MUTED_TEXT = "#5B6472";
 
 const drawRoundedRect = (
   ctx: CanvasRenderingContext2D,
@@ -66,6 +67,27 @@ const wrapText = (
 
   lines.push(currentLine);
   return lines;
+};
+
+const fitSingleLine = (
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+): string => {
+  if (ctx.measureText(text).width <= maxWidth) {
+    return text;
+  }
+
+  let trimmed = text.trim();
+  while (trimmed.length > 0) {
+    const candidate = `${trimmed}…`;
+    if (ctx.measureText(candidate).width <= maxWidth) {
+      return candidate;
+    }
+    trimmed = trimmed.slice(0, -1).trimEnd();
+  }
+
+  return "…";
 };
 
 const fitQuoteLayout = (
@@ -133,16 +155,27 @@ export const buildThreadQuoteImage = (quote: ThreadQuoteCandidate): string => {
   context.textBaseline = "middle";
   context.fillText("The Chatter by Zerodha", 92, 94);
 
-  drawRoundedRect(context, 66, 142, CARD_WIDTH - 132, 385, 20, SOFT_BG);
+  const infoWidth = CARD_WIDTH - 190;
+  context.textBaseline = "alphabetic";
+  context.fillStyle = BRAND_DARK;
+  context.font = "700 30px Inter, Manrope, sans-serif";
+  const companyLine = `${quote.companyName} | ${quote.marketCapCategory}`;
+  context.fillText(fitSingleLine(context, companyLine, infoWidth), 66, 166);
+
+  context.fillStyle = MUTED_TEXT;
+  context.font = "500 21px Inter, Manrope, sans-serif";
+  context.fillText(fitSingleLine(context, quote.industry, infoWidth), 66, 196);
+
+  drawRoundedRect(context, 66, 220, CARD_WIDTH - 132, 310, 20, SOFT_BG);
 
   const renderedQuote = `"${quote.quote}"`;
   const quoteBoxWidth = CARD_WIDTH - 208;
-  const quoteBoxHeight = 300;
+  const quoteBoxHeight = 260;
   const quoteLayout = fitQuoteLayout(context, renderedQuote, quoteBoxWidth, quoteBoxHeight);
   context.fillStyle = BRAND_DARK;
   context.font = `700 ${quoteLayout.fontSize}px Inter, Manrope, sans-serif`;
   context.textBaseline = "top";
-  let quoteY = 180;
+  let quoteY = 252;
   for (const line of quoteLayout.lines) {
     context.fillText(line, 104, quoteY);
     quoteY += quoteLayout.lineHeight;
@@ -152,7 +185,7 @@ export const buildThreadQuoteImage = (quote: ThreadQuoteCandidate): string => {
   context.fillStyle = BRAND_BLUE;
   context.font = "600 26px Inter, Manrope, sans-serif";
   context.textBaseline = "alphabetic";
-  context.fillText(speakerLine, 104, CARD_HEIGHT - 86);
+  context.fillText(fitSingleLine(context, speakerLine, CARD_WIDTH - 208), 104, CARD_HEIGHT - 86);
 
   return canvas.toDataURL("image/png");
 };
