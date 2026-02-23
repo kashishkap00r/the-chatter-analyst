@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   analyzePresentation,
   analyzeTranscript,
@@ -22,6 +22,11 @@ import PointsCard from './components/PointsCard';
 import AnalysisProgressPanel from './components/AnalysisProgressPanel';
 import { buildChatterClipboardExport } from './utils/chatterCopyExport';
 import { buildPointsClipboardExport } from './utils/pointsCopyExport';
+import {
+  clearPersistedSession,
+  loadPersistedSession,
+  savePersistedSession,
+} from './services/sessionStore';
 
 interface BatchProgressState {
   total: number;
@@ -29,6 +34,24 @@ interface BatchProgressState {
   failed: number;
   currentLabel?: string;
   progress?: ProgressEvent;
+}
+
+interface PersistedAppSessionV1 {
+  schemaVersion: 1;
+  savedAt: number;
+  appMode: AppMode;
+  inputMode: 'text' | 'file';
+  textInput: string;
+  provider: ProviderType;
+  geminiModel: ModelType;
+  openRouterModel: ModelType;
+  geminiPointsModel: ModelType;
+  openRouterPointsModel: ModelType;
+  batchFiles: BatchFile[];
+  chatterSingleState: ChatterAnalysisState;
+  batchProgress: BatchProgressState | null;
+  pointsBatchFiles: PointsBatchFile[];
+  pointsBatchProgress: BatchProgressState | null;
 }
 
 const statusStyles: Record<BatchFile['status'], string> = {
@@ -234,6 +257,61 @@ const getDynamicChunkSize = (fileSizeBytes: number, pageCount: number): number =
   return POINTS_CHUNK_SIZE;
 };
 
+const MODEL_TYPE_VALUES = new Set<string>(Object.values(ModelType) as string[]);
+const PROVIDER_TYPE_VALUES = new Set<string>(Object.values(ProviderType) as string[]);
+const APP_MODE_VALUES = new Set<string>(['chatter', 'points']);
+
+const normalizeRecoveredChatterFile = (file: BatchFile): BatchFile => {
+  if (file.status === 'parsing' || file.status === 'analyzing') {
+    if (file.content.trim()) {
+      return {
+        ...file,
+        status: 'ready',
+        progress: undefined,
+        error: 'Interrupted in previous session. Ready to resume.',
+        result: undefined,
+      };
+    }
+    return {
+      ...file,
+      status: 'error',
+      progress: undefined,
+      error: file.error || 'Interrupted in previous session before parsing completed.',
+      result: undefined,
+    };
+  }
+  return {
+    ...file,
+    progress: undefined,
+  };
+};
+
+const normalizeRecoveredPointsFile = (file: PointsBatchFile): PointsBatchFile => {
+  if (file.status === 'parsing' || file.status === 'analyzing') {
+    return {
+      ...file,
+      status: 'ready',
+      progress: undefined,
+      error: 'Interrupted in previous session. Ready to resume.',
+      result: undefined,
+    };
+  }
+
+  return {
+    ...file,
+    progress: undefined,
+  };
+};
+
+const formatSavedTimestamp = (timestamp: number): string => {
+  if (!Number.isFinite(timestamp)) return 'a previous session';
+  try {
+    return new Date(timestamp).toLocaleString();
+  } catch {
+    return 'a previous session';
+  }
+};
+
 const App: React.FC = () => {
   const [appMode, setAppMode] = useState<AppMode>('chatter');
   const [inputMode, setInputMode] = useState<'text' | 'file'>('file');
@@ -256,6 +334,11 @@ const App: React.FC = () => {
   const [pointsBatchProgress, setPointsBatchProgress] = useState<BatchProgressState | null>(null);
   const [pointsCopyAllStatus, setPointsCopyAllStatus] = useState<'idle' | 'copied' | 'error'>('idle');
   const [pointsCopyAllErrorMessage, setPointsCopyAllErrorMessage] = useState('');
+  const [pendingResumeSession, setPendingResumeSession] = useState<PersistedAppSessionV1 | null>(null);
+  const [isPersistenceReady, setIsPersistenceReady] = useState(false);
+  const [isPersistenceBlocked, setIsPersistenceBlocked] = useState(false);
+  const [sessionNotice, setSessionNotice] = useState('');
+  const [persistenceNotice, setPersistenceNotice] = useState('');
 
   const chatterFileInputRef = useRef<HTMLInputElement>(null);
   const pointsFileInputRef = useRef<HTMLInputElement>(null);
@@ -283,6 +366,184 @@ const App: React.FC = () => {
   const getCompletedPointsResults = useCallback((): PointsAndFiguresResult[] => {
     return pointsBatchFiles.filter((file) => file.result).map((file) => file.result!) as PointsAndFiguresResult[];
   }, [pointsBatchFiles]);
+
+  const applyPersistedSession = useCallback((snapshot: PersistedAppSessionV1) => {
+    if (APP_MODE_VALUES.has(snapshot.appMode)) {
+      setAppMode(snapshot.appMode);
+    }
+
+    if (snapshot.inputMode === 'text' || snapshot.inputMode === 'file') {
+      setInputMode(snapshot.inputMode);
+    }
+
+    setTextInput(typeof snapshot.textInput === 'string' ? snapshot.textInput : '');
+
+    if (PROVIDER_TYPE_VALUES.has(snapshot.provider)) {
+      setProvider(snapshot.provider);
+    }
+
+    if (MODEL_TYPE_VALUES.has(snapshot.geminiModel)) {
+      setGeminiModel(snapshot.geminiModel);
+    }
+    if (MODEL_TYPE_VALUES.has(snapshot.openRouterModel)) {
+      setOpenRouterModel(snapshot.openRouterModel);
+    }
+    if (MODEL_TYPE_VALUES.has(snapshot.geminiPointsModel)) {
+      setGeminiPointsModel(snapshot.geminiPointsModel);
+    }
+    if (MODEL_TYPE_VALUES.has(snapshot.openRouterPointsModel)) {
+      setOpenRouterPointsModel(snapshot.openRouterPointsModel);
+    }
+
+    const restoredBatchFiles = Array.isArray(snapshot.batchFiles)
+      ? snapshot.batchFiles.map(normalizeRecoveredChatterFile)
+      : [];
+    const restoredPointsFiles = Array.isArray(snapshot.pointsBatchFiles)
+      ? snapshot.pointsBatchFiles.map(normalizeRecoveredPointsFile)
+      : [];
+
+    setBatchFiles(restoredBatchFiles);
+    setPointsBatchFiles(restoredPointsFiles);
+
+    if (snapshot.chatterSingleState?.status === 'complete' && snapshot.chatterSingleState.result) {
+      setChatterSingleState(snapshot.chatterSingleState);
+    } else if (snapshot.chatterSingleState?.status === 'error' && snapshot.chatterSingleState.errorMessage) {
+      setChatterSingleState({
+        status: 'error',
+        errorMessage: snapshot.chatterSingleState.errorMessage,
+        progress: undefined,
+      });
+    } else {
+      setChatterSingleState({ status: 'idle' });
+    }
+
+    setBatchProgress(null);
+    setPointsBatchProgress(null);
+    setIsAnalyzingBatch(false);
+    setIsAnalyzingPointsBatch(false);
+    setCopyAllStatus('idle');
+    setCopyAllErrorMessage('');
+    setPointsCopyAllStatus('idle');
+    setPointsCopyAllErrorMessage('');
+  }, []);
+
+  const handleResumeSavedSession = useCallback(() => {
+    if (!pendingResumeSession) return;
+    applyPersistedSession(pendingResumeSession);
+    setPendingResumeSession(null);
+    setIsPersistenceReady(true);
+    setIsPersistenceBlocked(false);
+    setSessionNotice(`Resumed session from ${formatSavedTimestamp(pendingResumeSession.savedAt)}.`);
+  }, [applyPersistedSession, pendingResumeSession]);
+
+  const handleDiscardSavedSession = useCallback(async () => {
+    await clearPersistedSession();
+    setPendingResumeSession(null);
+    setIsPersistenceReady(true);
+    setIsPersistenceBlocked(false);
+    setSessionNotice('Discarded previous browser session.');
+  }, []);
+
+  const handleClearSavedSessionData = useCallback(async () => {
+    await clearPersistedSession();
+    setPendingResumeSession(null);
+    setIsPersistenceBlocked(false);
+    setPersistenceNotice('');
+    if (!isPersistenceReady) {
+      setIsPersistenceReady(true);
+    }
+    setSessionNotice('Cleared saved browser session data.');
+  }, [isPersistenceReady]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const initializeSession = async () => {
+      const snapshot = await loadPersistedSession<PersistedAppSessionV1>();
+      if (cancelled) return;
+
+      if (snapshot && snapshot.schemaVersion === 1) {
+        setPendingResumeSession(snapshot);
+        setSessionNotice('');
+        return;
+      }
+
+      setIsPersistenceReady(true);
+    };
+
+    initializeSession().catch(() => {
+      if (!cancelled) {
+        setIsPersistenceReady(true);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isPersistenceReady || isPersistenceBlocked) return;
+
+    const payload: PersistedAppSessionV1 = {
+      schemaVersion: 1,
+      savedAt: Date.now(),
+      appMode,
+      inputMode,
+      textInput,
+      provider,
+      geminiModel,
+      openRouterModel,
+      geminiPointsModel,
+      openRouterPointsModel,
+      batchFiles,
+      chatterSingleState,
+      batchProgress,
+      pointsBatchFiles,
+      pointsBatchProgress,
+    };
+
+    const timer = window.setTimeout(async () => {
+      const status = await savePersistedSession(payload);
+      if (status === 'quota_exceeded') {
+        setIsPersistenceBlocked(true);
+        setPersistenceNotice('Browser storage is full. Clear saved session data to resume autosave.');
+        return;
+      }
+      if (status === 'unsupported') {
+        setPersistenceNotice('Session resume is not supported in this browser.');
+        return;
+      }
+      if (status === 'error') {
+        setPersistenceNotice('Unable to save browser session right now.');
+        return;
+      }
+
+      if (status === 'ok' && !isPersistenceBlocked) {
+        setPersistenceNotice('');
+      }
+    }, 650);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [
+    appMode,
+    inputMode,
+    textInput,
+    provider,
+    geminiModel,
+    openRouterModel,
+    geminiPointsModel,
+    openRouterPointsModel,
+    batchFiles,
+    chatterSingleState,
+    batchProgress,
+    pointsBatchFiles,
+    pointsBatchProgress,
+    isPersistenceReady,
+    isPersistenceBlocked,
+  ]);
 
   const runTranscriptWithRetry = useCallback(
     async (
@@ -982,6 +1243,8 @@ const App: React.FC = () => {
   const isTextLoading = chatterSingleState.status === 'analyzing';
   const isChatterLoading = isTextLoading || isAnalyzingBatch;
   const isPointsLoading = isAnalyzingPointsBatch;
+  const isResumePromptVisible = Boolean(pendingResumeSession);
+  const isResumeDecisionPending = isResumePromptVisible && !isPersistenceReady;
 
   const renderChatterWorkbench = () => (
     <section className="lg:col-span-5 lg:sticky lg:top-24 self-start">
@@ -994,17 +1257,19 @@ const App: React.FC = () => {
         <div className="inline-flex rounded-xl border border-line bg-canvas p-1 mb-4 w-full">
           <button
             onClick={() => setInputMode('file')}
+            disabled={isResumeDecisionPending}
             className={`flex-1 rounded-lg py-2 text-sm font-semibold transition ${
               inputMode === 'file' ? 'bg-white text-ink shadow-sm' : 'text-stone hover:text-ink'
-            }`}
+            } disabled:opacity-50`}
           >
             Files (Batch)
           </button>
           <button
             onClick={() => setInputMode('text')}
+            disabled={isResumeDecisionPending}
             className={`flex-1 rounded-lg py-2 text-sm font-semibold transition ${
               inputMode === 'text' ? 'bg-white text-ink shadow-sm' : 'text-stone hover:text-ink'
-            }`}
+            } disabled:opacity-50`}
           >
             Paste Text
           </button>
@@ -1016,6 +1281,7 @@ const App: React.FC = () => {
             placeholder="Paste earnings call transcript here..."
             value={textInput}
             onChange={(event) => setTextInput(event.target.value)}
+            disabled={isResumeDecisionPending}
           />
         ) : (
           <>
@@ -1028,6 +1294,7 @@ const App: React.FC = () => {
                 accept=".txt,.pdf"
                 multiple
                 onChange={handleChatterFileUpload}
+                disabled={isResumeDecisionPending}
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
               />
             </div>
@@ -1059,6 +1326,7 @@ const App: React.FC = () => {
                     {file.status === 'error' && file.content.trim().length > 0 && (
                       <button
                         onClick={() => retryBatchFile(file.id)}
+                        disabled={isResumeDecisionPending}
                         className="text-xs font-semibold text-brand hover:text-ink"
                         title="Retry file"
                       >
@@ -1067,6 +1335,7 @@ const App: React.FC = () => {
                     )}
                     <button
                       onClick={() => removeBatchFile(file.id)}
+                      disabled={isResumeDecisionPending || isAnalyzingBatch}
                       className="text-stone hover:text-rose-700 text-sm leading-none"
                       title="Remove file"
                       aria-label="Remove file"
@@ -1088,7 +1357,7 @@ const App: React.FC = () => {
         <div className="mt-5 pt-4 border-t border-line flex gap-3">
           <button
             onClick={clearChatter}
-            disabled={isChatterLoading}
+            disabled={isChatterLoading || isResumeDecisionPending}
             className="px-4 py-2.5 rounded-xl border border-line text-sm font-semibold text-stone hover:text-ink disabled:opacity-50"
           >
             Clear
@@ -1096,7 +1365,7 @@ const App: React.FC = () => {
           {inputMode === 'text' ? (
             <button
               onClick={handleAnalyzeText}
-              disabled={!textInput.trim() || isTextLoading}
+              disabled={!textInput.trim() || isTextLoading || isResumeDecisionPending}
               className="flex-1 rounded-xl bg-brand text-white text-sm font-semibold py-2.5 px-4 disabled:opacity-50 hover:bg-brand/90 transition"
             >
               {isTextLoading ? 'Analyzing...' : 'Extract Insights'}
@@ -1104,7 +1373,7 @@ const App: React.FC = () => {
           ) : (
             <button
               onClick={handleAnalyzeBatch}
-              disabled={readyCount === 0 || isAnalyzingBatch}
+              disabled={readyCount === 0 || isAnalyzingBatch || isResumeDecisionPending}
               className="flex-1 rounded-xl bg-brand text-white text-sm font-semibold py-2.5 px-4 disabled:opacity-50 hover:bg-brand/90 transition"
             >
               {isAnalyzingBatch ? 'Processing Batch...' : `Analyze ${readyCount} File${readyCount === 1 ? '' : 's'}`}
@@ -1234,6 +1503,7 @@ const App: React.FC = () => {
             accept=".pdf"
             multiple
             onChange={handlePointsFileUpload}
+            disabled={isResumeDecisionPending}
             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
           />
         </div>
@@ -1269,6 +1539,7 @@ const App: React.FC = () => {
                 {file.status === 'error' && (
                   <button
                     onClick={() => retryPointsBatchFile(file.id)}
+                    disabled={isResumeDecisionPending}
                     className="text-xs font-semibold text-brand hover:text-ink"
                     title="Retry file"
                   >
@@ -1277,6 +1548,7 @@ const App: React.FC = () => {
                 )}
                 <button
                   onClick={() => removePointsBatchFile(file.id)}
+                  disabled={isResumeDecisionPending || isAnalyzingPointsBatch}
                   className="text-stone hover:text-rose-700 text-sm leading-none"
                   title="Remove file"
                   aria-label="Remove file"
@@ -1296,14 +1568,14 @@ const App: React.FC = () => {
         <div className="mt-5 pt-4 border-t border-line flex gap-3">
           <button
             onClick={clearPoints}
-            disabled={isPointsLoading}
+            disabled={isPointsLoading || isResumeDecisionPending}
             className="px-4 py-2.5 rounded-xl border border-line text-sm font-semibold text-stone hover:text-ink disabled:opacity-50"
           >
             Clear
           </button>
           <button
             onClick={handleAnalyzePointsBatch}
-            disabled={pointsReadyCount === 0 || isPointsLoading}
+            disabled={pointsReadyCount === 0 || isPointsLoading || isResumeDecisionPending}
             className="flex-1 rounded-xl bg-brand text-white text-sm font-semibold py-2.5 px-4 disabled:opacity-50 hover:bg-brand/90 transition"
           >
             {isPointsLoading ? 'Processing Batch...' : `Analyze ${pointsReadyCount} File${pointsReadyCount === 1 ? '' : 's'}`}
@@ -1406,6 +1678,7 @@ const App: React.FC = () => {
                   <select
                     value={provider}
                     onChange={(event) => setProvider(event.target.value as ProviderType)}
+                    disabled={isResumeDecisionPending}
                     className="ml-2 rounded-lg border border-line bg-white px-3 py-1.5 text-sm text-ink"
                   >
                     <option value={ProviderType.GEMINI}>Gemini</option>
@@ -1417,6 +1690,7 @@ const App: React.FC = () => {
                   Model
                   <select
                     value={appMode === 'chatter' ? selectedChatterModel : selectedPointsModel}
+                    disabled={isResumeDecisionPending}
                     onChange={(event) => {
                       const selectedModel = event.target.value as ModelType;
                       if (provider === ProviderType.GEMINI) {
@@ -1442,6 +1716,14 @@ const App: React.FC = () => {
                     ))}
                   </select>
                 </label>
+
+                <button
+                  onClick={handleClearSavedSessionData}
+                  className="rounded-lg border border-line bg-white px-3 py-1.5 text-sm font-semibold text-stone hover:text-ink"
+                  title="Clear saved browser session"
+                >
+                  Clear Saved Session
+                </button>
               </div>
             </div>
 
@@ -1450,9 +1732,10 @@ const App: React.FC = () => {
                 onClick={() => {
                   setAppMode('chatter');
                 }}
+                disabled={isResumeDecisionPending}
                 className={`flex-1 rounded-lg py-2 text-sm font-semibold transition ${
                   appMode === 'chatter' ? 'bg-canvas text-ink shadow-sm' : 'text-stone hover:text-ink'
-                }`}
+                } disabled:opacity-50`}
               >
                 The Chatter
               </button>
@@ -1460,9 +1743,10 @@ const App: React.FC = () => {
                 onClick={() => {
                   setAppMode('points');
                 }}
+                disabled={isResumeDecisionPending}
                 className={`flex-1 rounded-lg py-2 text-sm font-semibold transition ${
                   appMode === 'points' ? 'bg-canvas text-ink shadow-sm' : 'text-stone hover:text-ink'
-                }`}
+                } disabled:opacity-50`}
               >
                 Points & Figures
               </button>
@@ -1472,6 +1756,43 @@ const App: React.FC = () => {
       </header>
 
       <main className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {isResumePromptVisible && pendingResumeSession && (
+          <div className="mb-5 rounded-2xl border border-brand/35 bg-brand-soft px-5 py-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-ink">Previous session found</p>
+              <p className="text-sm text-stone mt-1">
+                Resume work from {formatSavedTimestamp(pendingResumeSession.savedAt)}.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleResumeSavedSession}
+                className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand/90"
+              >
+                Resume
+              </button>
+              <button
+                onClick={handleDiscardSavedSession}
+                className="rounded-lg border border-line bg-white px-4 py-2 text-sm font-semibold text-stone hover:text-ink"
+              >
+                Discard
+              </button>
+            </div>
+          </div>
+        )}
+
+        {sessionNotice && (
+          <div className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+            {sessionNotice}
+          </div>
+        )}
+
+        {persistenceNotice && (
+          <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            {persistenceNotice}
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
           {appMode === 'chatter' ? (
             <>
