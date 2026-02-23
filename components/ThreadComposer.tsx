@@ -22,6 +22,7 @@ import {
 } from "../utils/threadImageExport";
 
 type ComposerStatus = "idle" | "loading" | "ready" | "error";
+type ComposerView = "selection" | "results";
 type ThreadTweetKind = "intro" | "insight" | "outro";
 
 interface ThreadTweetCard {
@@ -41,6 +42,7 @@ interface PersistedThreadComposerState {
   schemaVersion: 1;
   substackUrl: string;
   source: ThreadEditionSource | null;
+  composerView?: ComposerView;
   shortlistedQuoteIds?: string[];
   selectedQuoteIds: string[];
   tweets: ThreadTweetCard[];
@@ -59,6 +61,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
   const [ingestStatus, setIngestStatus] = useState<ComposerStatus>("idle");
   const [ingestError, setIngestError] = useState("");
   const [source, setSource] = useState<ThreadEditionSource | null>(null);
+  const [composerView, setComposerView] = useState<ComposerView>("selection");
   const [shortlistStatus, setShortlistStatus] = useState<ComposerStatus>("idle");
   const [shortlistError, setShortlistError] = useState("");
   const [shortlistedQuoteIds, setShortlistedQuoteIds] = useState<string[]>([]);
@@ -106,6 +109,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
   const selectedCount = selectedQuotes.length;
   const totalQuoteCount = allQuotes.length;
   const shortlistedCount = shortlistedQuotes.length;
+  const hasGeneratedThread = tweets.length > 0;
 
   useEffect(() => {
     try {
@@ -119,6 +123,11 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
       setShortlistedQuoteIds(Array.isArray(parsed.shortlistedQuoteIds) ? parsed.shortlistedQuoteIds : []);
       setSelectedQuoteIds(Array.isArray(parsed.selectedQuoteIds) ? parsed.selectedQuoteIds : []);
       setTweets(Array.isArray(parsed.tweets) ? parsed.tweets : []);
+      if (parsed.composerView === "selection" || parsed.composerView === "results") {
+        setComposerView(parsed.composerView);
+      } else {
+        setComposerView(Array.isArray(parsed.tweets) && parsed.tweets.length > 0 ? "results" : "selection");
+      }
       setIngestStatus(parsed.source ? "ready" : "idle");
       setShortlistStatus(parsed.source && Array.isArray(parsed.shortlistedQuoteIds) ? "ready" : "idle");
       setShortlistError("");
@@ -133,6 +142,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
       schemaVersion: 1,
       substackUrl,
       source,
+      composerView,
       shortlistedQuoteIds,
       selectedQuoteIds,
       tweets,
@@ -143,7 +153,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
     } catch {
       // Ignore storage write failures; feature remains functional.
     }
-  }, [selectedQuoteIds, shortlistedQuoteIds, source, substackUrl, tweets]);
+  }, [composerView, selectedQuoteIds, shortlistedQuoteIds, source, substackUrl, tweets]);
 
   const setFeedbackForTweet = (tweetId: string, message: string) => {
     setTweetFeedback((prev) => ({ ...prev, [tweetId]: message }));
@@ -174,6 +184,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
     setIngestStatus("idle");
     setIngestError("");
     setSource(null);
+    setComposerView("selection");
     setShortlistStatus("idle");
     setShortlistError("");
     setShortlistedQuoteIds([]);
@@ -251,6 +262,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
 
     setIngestStatus("loading");
     setIngestError("");
+    setComposerView("selection");
     clearThreadDraft();
     setShortlistedQuoteIds([]);
     setShortlistStatus("idle");
@@ -279,6 +291,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
 
     setIngestStatus("loading");
     setIngestError("");
+    setComposerView("selection");
     clearThreadDraft();
     setShortlistedQuoteIds([]);
     setShortlistStatus("idle");
@@ -330,6 +343,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
   const handleGenerateThread = async () => {
     if (!source || selectedQuotes.length === 0) return;
 
+    setComposerView("selection");
     setThreadStatus("loading");
     setThreadError("");
     setTweets([]);
@@ -371,6 +385,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
       setTweets(builtTweets);
       hydrateGeneratedImages(selectedQuotes);
       setThreadStatus("ready");
+      setComposerView("results");
     } catch (error: any) {
       setThreadStatus("error");
       setThreadError(String(error?.message || "Thread generation failed."));
@@ -609,7 +624,42 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
         </div>
       )}
 
-      {source && (
+      {(source || hasGeneratedThread) && (
+        <div className="sticky top-4 z-10 rounded-xl border border-line bg-white/95 px-3 py-2 backdrop-blur">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="inline-flex rounded-lg border border-line bg-canvas p-1">
+              <button
+                onClick={() => setComposerView("selection")}
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                  composerView === "selection" ? "bg-white text-ink shadow-sm" : "text-stone hover:text-ink"
+                }`}
+              >
+                Selection
+              </button>
+              <button
+                onClick={() => setComposerView("results")}
+                disabled={!hasGeneratedThread}
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                  composerView === "results"
+                    ? "bg-white text-ink shadow-sm"
+                    : "text-stone hover:text-ink disabled:opacity-50 disabled:hover:text-stone"
+                }`}
+              >
+                Generated Thread
+              </button>
+            </div>
+            <p className="text-xs text-stone">
+              {composerView === "results" && hasGeneratedThread
+                ? `${tweets.length} tweets ready to publish.`
+                : source
+                  ? `${selectedCount} selected from ${totalQuoteCount}.`
+                  : "Load an edition to start selecting quotes."}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {source && composerView === "selection" && (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-sm text-stone">
@@ -716,8 +766,32 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
         </div>
       )}
 
-      {tweets.length > 0 && (
+      {composerView === "results" && (
         <div className="space-y-4">
+          <div className="rounded-xl border border-line bg-white px-4 py-3 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm text-stone">
+              Generated output is isolated here to keep quote selection uncluttered.
+            </p>
+            <button
+              onClick={() => setComposerView("selection")}
+              className="rounded-lg border border-line bg-white px-3 py-1.5 text-xs font-semibold text-stone hover:text-ink"
+            >
+              Back to Selection
+            </button>
+          </div>
+
+          {!hasGeneratedThread && (
+            <div className="rounded-xl border border-dashed border-line bg-canvas/30 px-4 py-8 text-center text-sm text-stone">
+              No generated thread yet. Select quotes and click Generate Thread to populate this view.
+            </div>
+          )}
+
+          {threadError && (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{threadError}</div>
+          )}
+
+          {hasGeneratedThread && (
+            <>
           <div className="rounded-xl border border-line bg-canvas/30 px-4 py-3 text-sm text-stone">
             {tweets.length} tweet blocks ready. For insight tweets, Copy Tweet attempts text + image together; Download PNG is always available.
           </div>
@@ -803,6 +877,8 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
               );
             })}
           </div>
+            </>
+          )}
         </div>
       )}
     </section>
