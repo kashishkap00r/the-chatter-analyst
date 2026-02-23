@@ -713,6 +713,7 @@ const App: React.FC = () => {
                 range.startPage - 1,
                 provider,
                 selectedPointsModel,
+                { startPage: range.startPage, endPage: range.endPage },
               );
               chunkResults.push(chunkResult);
               chunkSucceeded = true;

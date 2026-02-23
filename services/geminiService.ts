@@ -288,6 +288,7 @@ export const analyzePresentation = async (
   pageOffset = 0,
   provider: ProviderType = ProviderType.GEMINI,
   modelId: ModelType = ModelType.FLASH,
+  chunkRange?: { startPage: number; endPage: number },
 ): Promise<PointsAndFiguresResult> => {
   if (!Array.isArray(pageImages) || pageImages.length === 0) {
     throw new Error("No presentation pages found to analyze.");
@@ -298,6 +299,8 @@ export const analyzePresentation = async (
     provider,
     pageImages,
     model: modelId,
+    chunkStartPage: chunkRange?.startPage,
+    chunkEndPage: chunkRange?.endPage,
   });
 
   if (!result.slides || result.slides.length === 0) {

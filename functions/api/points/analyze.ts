@@ -33,6 +33,16 @@ const IS_STRICT_VALIDATION: boolean = false;
 const UPSTREAM_DEPENDENCY_STATUS = 424;
 const VALIDATION_STATUS = 422;
 
+interface ChunkRange {
+  startPage: number;
+  endPage: number;
+}
+
+interface PointsValidationResult {
+  error: string | null;
+  normalizedPageCount: number;
+}
+
 const json = (payload: unknown, status = 200): Response =>
   new Response(JSON.stringify(payload), {
     status,
@@ -56,6 +66,9 @@ const error = (status: number, code: string, message: string, reasonCode?: strin
 
 const hasNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value.trim().length > 0;
+
+const isInteger = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value);
 
 const extractRetryAfterSeconds = (message: string): number | null => {
   const match = message.match(/retry in\s+([\d.]+)s/i);
@@ -159,9 +172,92 @@ const sanitizeContext = (value: string): string => {
   return normalized;
 };
 
-const validatePointsResult = (result: any, maxPageCount: number): string | null => {
+const parseChunkRange = (
+  rawStartPage: unknown,
+  rawEndPage: unknown,
+  chunkPageCount: number,
+): { chunkRange: ChunkRange | null; errorMessage?: string } => {
+  const hasStart = rawStartPage !== undefined;
+  const hasEnd = rawEndPage !== undefined;
+
+  if (!hasStart && !hasEnd) {
+    return { chunkRange: null };
+  }
+
+  if (!hasStart || !hasEnd || !isInteger(rawStartPage) || !isInteger(rawEndPage)) {
+    return {
+      chunkRange: null,
+      errorMessage: "Fields 'chunkStartPage' and 'chunkEndPage' must be integer values when provided.",
+    };
+  }
+
+  const startPage = rawStartPage;
+  const endPage = rawEndPage;
+  if (startPage < 1 || endPage < startPage) {
+    return {
+      chunkRange: null,
+      errorMessage: "Fields 'chunkStartPage' and 'chunkEndPage' define an invalid range.",
+    };
+  }
+
+  const expectedChunkLength = endPage - startPage + 1;
+  if (expectedChunkLength !== chunkPageCount) {
+    return {
+      chunkRange: null,
+      errorMessage:
+        `Chunk range length (${expectedChunkLength}) does not match pageImages length (${chunkPageCount}).`,
+    };
+  }
+
+  return {
+    chunkRange: { startPage, endPage },
+  };
+};
+
+const buildPointsPrompt = (chunkPageCount: number, chunkRange: ChunkRange | null): string => {
+  const chunkGuidance =
+    chunkRange === null
+      ? [
+          "REQUEST PAGE WINDOW",
+          `- You are seeing a page chunk in this request with exactly ${chunkPageCount} images.`,
+          `- selectedPageNumber MUST be local to this chunk: 1 to ${chunkPageCount}.`,
+        ]
+      : [
+          "REQUEST PAGE WINDOW",
+          `- You are seeing only a chunk of the full deck: absolute pages ${chunkRange.startPage}-${chunkRange.endPage}.`,
+          `- selectedPageNumber MUST be local to this chunk: 1 to ${chunkPageCount} (not absolute deck page).`,
+          `- Mapping: local page 1 = absolute page ${chunkRange.startPage}; local page ${chunkPageCount} = absolute page ${chunkRange.endPage}.`,
+        ];
+
+  return `${POINTS_PROMPT}\n\n${chunkGuidance.join("\n")}`;
+};
+
+const normalizeSelectedPageNumber = (
+  selectedPageNumber: number,
+  maxChunkPageCount: number,
+  chunkRange: ChunkRange | null,
+): { value: number; normalized: boolean } | null => {
+  if (selectedPageNumber >= 1 && selectedPageNumber <= maxChunkPageCount) {
+    return { value: selectedPageNumber, normalized: false };
+  }
+
+  if (chunkRange && selectedPageNumber >= chunkRange.startPage && selectedPageNumber <= chunkRange.endPage) {
+    const localPage = selectedPageNumber - chunkRange.startPage + 1;
+    if (localPage >= 1 && localPage <= maxChunkPageCount) {
+      return { value: localPage, normalized: true };
+    }
+  }
+
+  return null;
+};
+
+const validatePointsResult = (
+  result: any,
+  maxPageCount: number,
+  chunkRange: ChunkRange | null,
+): PointsValidationResult => {
   if (!result || typeof result !== "object") {
-    return "Gemini response is not a JSON object.";
+    return { error: "Gemini response is not a JSON object.", normalizedPageCount: 0 };
   }
 
   const requiredRootFields = [
@@ -174,51 +270,65 @@ const validatePointsResult = (result: any, maxPageCount: number): string | null 
   ];
   for (const field of requiredRootFields) {
     if (!hasNonEmptyString(result[field])) {
-      return `Missing or invalid field '${field}'.`;
+      return { error: `Missing or invalid field '${field}'.`, normalizedPageCount: 0 };
     }
   }
 
   if (!Array.isArray(result.slides) || result.slides.length === 0) {
-    return "Field 'slides' must contain at least 1 item.";
+    return { error: "Field 'slides' must contain at least 1 item.", normalizedPageCount: 0 };
   }
+
+  let normalizedPageCount = 0;
 
   for (let i = 0; i < result.slides.length; i++) {
     const slide = result.slides[i];
     const slideIndex = i + 1;
     if (!slide || typeof slide !== "object") {
-      return `Slide #${slideIndex} is invalid.`;
+      return { error: `Slide #${slideIndex} is invalid.`, normalizedPageCount };
     }
 
     if (!Number.isInteger(slide.selectedPageNumber)) {
-      return `Slide #${slideIndex} has an invalid 'selectedPageNumber'.`;
+      return { error: `Slide #${slideIndex} has an invalid 'selectedPageNumber'.`, normalizedPageCount };
     }
 
-    if (slide.selectedPageNumber < 1 || slide.selectedPageNumber > maxPageCount) {
-      return `Slide #${slideIndex} page number ${slide.selectedPageNumber} is out of range.`;
+    const normalizedPage = normalizeSelectedPageNumber(slide.selectedPageNumber, maxPageCount, chunkRange);
+    if (!normalizedPage) {
+      const rangeHint =
+        chunkRange === null
+          ? `Expected local page number in range 1-${maxPageCount}.`
+          : `Expected local page number in range 1-${maxPageCount} for this chunk (absolute ${chunkRange.startPage}-${chunkRange.endPage}).`;
+      return {
+        error: `Slide #${slideIndex} page number ${slide.selectedPageNumber} is out of range. ${rangeHint}`,
+        normalizedPageCount,
+      };
     }
+    if (normalizedPage.normalized) {
+      normalizedPageCount += 1;
+    }
+    slide.selectedPageNumber = normalizedPage.value;
 
     if (!hasNonEmptyString(slide.context)) {
-      return `Slide #${slideIndex} is missing 'context'.`;
+      return { error: `Slide #${slideIndex} is missing 'context'.`, normalizedPageCount };
     }
 
     const normalizedContext = sanitizeContext(slide.context);
     if (!normalizedContext) {
-      return `Slide #${slideIndex} has empty context after normalization.`;
+      return { error: `Slide #${slideIndex} has empty context after normalization.`, normalizedPageCount };
     }
 
     if (IS_STRICT_VALIDATION) {
       if (disallowedContextStart.test(slide.context.trim())) {
-        return `Slide #${slideIndex} context must not start with generic narration.`;
+        return { error: `Slide #${slideIndex} context must not start with generic narration.`, normalizedPageCount };
       }
       if (normalizedContext.length < 80) {
-        return `Slide #${slideIndex} context is too short for an insight-led explanation.`;
+        return { error: `Slide #${slideIndex} context is too short for an insight-led explanation.`, normalizedPageCount };
       }
     }
 
     slide.context = normalizedContext;
   }
 
-  return null;
+  return { error: null, normalizedPageCount };
 };
 
 const extractBase64 = (dataUri: string): string => {
@@ -289,10 +399,21 @@ export async function onRequestPost(context: any): Promise<Response> {
     return error(400, "BAD_REQUEST", "All items in 'pageImages' must be non-empty strings.", "INVALID_PAGE_IMAGE");
   }
 
+  const { chunkRange, errorMessage: chunkRangeError } = parseChunkRange(
+    body?.chunkStartPage,
+    body?.chunkEndPage,
+    pageImages.length,
+  );
+  if (chunkRangeError) {
+    return error(400, "BAD_REQUEST", chunkRangeError, "INVALID_CHUNK_RANGE");
+  }
+
   const totalImageChars = pageImages.reduce((sum, item) => sum + item.length, 0);
   if (totalImageChars > MAX_TOTAL_IMAGE_CHARS) {
     return error(413, "BAD_REQUEST", "Total image payload is too large.", "PAYLOAD_TOO_LARGE");
   }
+
+  const promptText = buildPointsPrompt(pageImages.length, chunkRange);
 
   const imageParts = pageImages.map((dataUri) => ({
     inlineData: {
@@ -310,6 +431,8 @@ export async function onRequestPost(context: any): Promise<Response> {
       providerPreference,
       pageCount: pageImages.length,
       totalImageChars,
+      chunkStartPage: chunkRange?.startPage ?? null,
+      chunkEndPage: chunkRange?.endPage ?? null,
     }),
   );
 
@@ -332,7 +455,7 @@ export async function onRequestPost(context: any): Promise<Response> {
               model: attemptModel,
               contents: [
                 {
-                  parts: [{ text: POINTS_PROMPT }, ...imageParts],
+                  parts: [{ text: promptText }, ...imageParts],
                 },
               ],
               responseSchema: POINTS_RESPONSE_SCHEMA,
@@ -347,7 +470,7 @@ export async function onRequestPost(context: any): Promise<Response> {
                 {
                   type: "text",
                   text:
-                    `${POINTS_PROMPT}\n\n` +
+                    `${promptText}\n\n` +
                     "FINAL OUTPUT REQUIREMENT: Return only one valid JSON object. No markdown, no explanation.",
                 },
                 ...pageImages.map((dataUri) => ({
@@ -357,14 +480,17 @@ export async function onRequestPost(context: any): Promise<Response> {
               ],
             });
 
-      const validationError = validatePointsResult(result, pageImages.length);
-      if (validationError) {
+      const validation = validatePointsResult(result, pageImages.length, chunkRange);
+      if (validation.error) {
         console.log(
           JSON.stringify({
             event: "points_request_validation_failed",
             requestId,
             model: attemptModel,
-            validationError,
+            validationError: validation.error,
+            normalizedPageCount: validation.normalizedPageCount,
+            chunkStartPage: chunkRange?.startPage ?? null,
+            chunkEndPage: chunkRange?.endPage ?? null,
           }),
         );
         return error(
@@ -372,7 +498,12 @@ export async function onRequestPost(context: any): Promise<Response> {
           "UPSTREAM_ERROR",
           "Presentation analysis failed validation.",
           "VALIDATION_FAILED",
-          { requestId, validationError, model: attemptModel },
+          {
+            requestId,
+            validationError: validation.error,
+            model: attemptModel,
+            normalizedPageCount: validation.normalizedPageCount,
+          },
         );
       }
 
@@ -384,6 +515,9 @@ export async function onRequestPost(context: any): Promise<Response> {
           requestedModel: model,
           resolvedModel: attemptModel,
           slides: Array.isArray(result?.slides) ? result.slides.length : null,
+          normalizedPageCount: validation.normalizedPageCount,
+          chunkStartPage: chunkRange?.startPage ?? null,
+          chunkEndPage: chunkRange?.endPage ?? null,
         }),
       );
 

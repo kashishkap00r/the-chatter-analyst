@@ -158,7 +158,7 @@ SLIDE SELECTION RULES
 
 SLIDE OUTPUT FORMAT
 - For each selected slide, return:
-  a) selectedPageNumber (1-indexed)
+  a) selectedPageNumber (1-indexed local page number within the provided request images, not full-deck absolute page)
   b) context: one insight-first paragraph with this structure:
      - Start directly with what has changed or what stands out in the slide data.
      - Include 2-3 concrete observations from the slide (mix, trend, comparison, composition shift, concentration, etc.).
