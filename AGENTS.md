@@ -1,42 +1,45 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `index.tsx` mounts `App.tsx` (main UI flow for Chatter and Points & Figures).
-- UI components live in `components/` (for example `QuoteCard.tsx`, `PointsCard.tsx`).
-- Client-side parsing/API orchestration is in `services/geminiService.ts`.
-- Cloudflare Pages Functions endpoints are in `functions/api/chatter/analyze.ts` and `functions/api/points/analyze.ts`.
-- Shared Gemini prompts, schemas, and API helper logic live in `functions/_shared/gemini.ts`.
-- Shared app contracts are in `types.ts`; export utilities are in `utils/`.
+- App entry is `index.tsx`, which mounts `App.tsx`; global styles and local fonts are in `styles.css` and `public/fonts/`.
+- UI components live in `components/` (for example `QuoteCard.tsx`, `PointsCard.tsx`, `AnalysisProgressPanel.tsx`).
+- Client parsing and API calls are in `services/geminiService.ts`.
+- Server endpoints (Cloudflare Pages Functions) are in `functions/api/chatter/analyze.ts`, `functions/api/points/analyze.ts`, and `functions/api/health/gemini.ts`.
+- Shared LLM schemas/prompts/helpers are in `functions/_shared/gemini.ts`.
+- Shared types are in `types.ts`; export formatters are in `utils/`.
+- Build output is generated to `dist/` (do not edit manually).
 
 ## Build, Test, and Development Commands
-- `npm install`: install dependencies.
-- `npm run dev`: run Vite locally.
-- `npm run build`: create production bundle in `dist/`.
-- `npm run preview`: preview the production bundle.
-- `npx wrangler pages deploy dist --project-name chatter-analyst --branch main`: deploy to Cloudflare Pages.
+- `npm install` installs dependencies.
+- `npm run dev` starts the Vite dev server.
+- `npx tsc --noEmit` runs type-checking without emitting files.
+- `npm run build` produces production assets in `dist/`.
+- `npm run preview` serves the production build locally.
+- `npx wrangler pages deploy dist --project-name chatter-analyst --branch main` deploys manually when needed.
 
 ## Coding Style & Naming Conventions
-- Language stack: TypeScript + React functional components.
-- Use 2-space indentation, semicolons, and explicit types at API boundaries.
-- File naming: components use `PascalCase.tsx`; services/helpers/routes use `camelCase.ts`.
-- Keep prompt/schema changes centralized in `functions/_shared/gemini.ts`.
+- Stack: TypeScript + React functional components.
+- Use 2-space indentation, semicolons, and explicit typing at API boundaries.
+- Naming: components use `PascalCase.tsx`; helpers/services/routes use `camelCase.ts`.
+- Keep Tailwind tokens in `tailwind.config.cjs` and global styles in `styles.css`.
+- Keep prompt/schema updates centralized in `functions/_shared/gemini.ts`.
 
 ## Testing Guidelines
 - No formal automated suite is configured yet.
 - Minimum manual QA before merge:
-1. `npm run build` passes with no errors.
+1. `npx tsc --noEmit` and `npm run build` pass.
 2. Chatter works for pasted text and uploaded `.txt`/`.pdf`.
-3. Points mode accepts valid PDF decks and handles oversized/invalid input cleanly.
-4. Error states show actionable messages (rate limit, timeout, validation).
+3. Points mode accepts valid decks and surfaces clear chunk/retry errors.
+4. Copy/export actions and tab switching preserve expected UI state.
 - If adding tests, use Vitest + React Testing Library with `*.test.ts` / `*.test.tsx`.
 
 ## Commit & Pull Request Guidelines
-- Follow Conventional Commits (example: `fix: stabilize points chunk retries`).
-- Keep commits scoped to one logical change.
-- PRs should include purpose, impacted files, QA evidence, and screenshots for UI updates.
+- Follow Conventional Commits (for example, `feat: add openrouter provider toggle`).
+- Keep commits focused to one logical change; avoid mixing UI + backend refactors unless necessary.
+- PRs should include: problem statement, solution summary, changed paths, manual QA evidence, and screenshots for UI changes.
 
 ## Security & Configuration Tips
 - Never commit secrets or API keys.
-- Store `GEMINI_API_KEY` in Cloudflare Pages secrets for production.
-- Keep Gemini calls server-side in `functions/api/*`; do not call Gemini directly from browser code.
-- Preserve server request limits and validation guards when editing API handlers.
+- Store runtime keys in Cloudflare Pages secrets (for example `GEMINI_API_KEY`, `OPENROUTER_API_KEY`).
+- Keep model calls server-side in `functions/api/*`; never expose provider keys to browser code.
+- Preserve server-side request limits, schema validation, and retry guards when editing API handlers.

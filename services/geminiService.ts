@@ -43,6 +43,30 @@ interface PdfImageConversionOptions {
   jpegQuality?: number;
 }
 
+interface HighQualityRenderOptions {
+  scale?: number;
+  pngDataUrlMaxChars?: number;
+  jpegFallbackQuality?: number;
+  onProgress?: (event: HighQualityRenderProgressEvent) => void;
+}
+
+interface HighQualityRenderProgressEvent {
+  current: number;
+  total: number;
+  pageNumber: number;
+}
+
+interface HighQualityRenderFailure {
+  pageNumber: number;
+  reason: string;
+}
+
+export interface HighQualityRenderResult {
+  imagesByPage: Record<number, string>;
+  downgradedPages: number[];
+  failedPages: HighQualityRenderFailure[];
+}
+
 const parseRetryAfterSeconds = (response: Response): number | null => {
   const header = response.headers.get("retry-after");
   if (!header) return null;
@@ -236,6 +260,102 @@ export const convertPdfToImages = async (
   );
 
   return Promise.all(imagePromises);
+};
+
+export const renderPdfPagesHighQuality = async (
+  file: File,
+  pageNumbers: number[],
+  options?: HighQualityRenderOptions,
+): Promise<HighQualityRenderResult> => {
+  if (file.size > 25 * 1024 * 1024) {
+    throw new Error("Presentation PDF is too large (max 25MB).");
+  }
+
+  const uniquePages = Array.from(
+    new Set(
+      pageNumbers
+        .filter((value) => Number.isInteger(value))
+        .map((value) => Number(value))
+        .filter((value) => value > 0),
+    ),
+  ).sort((a, b) => a - b);
+
+  if (uniquePages.length === 0) {
+    return {
+      imagesByPage: {},
+      downgradedPages: [],
+      failedPages: [],
+    };
+  }
+
+  const pdf = await getPdfDocument(file);
+  const pdfPageCount = pdf.numPages;
+  const renderScale = options?.scale ?? 2.0;
+  const maxPngChars = options?.pngDataUrlMaxChars ?? 4_800_000;
+  const jpegFallbackQuality = options?.jpegFallbackQuality ?? 0.92;
+
+  const imagesByPage: Record<number, string> = {};
+  const downgradedPages: number[] = [];
+  const failedPages: HighQualityRenderFailure[] = [];
+  const total = uniquePages.length;
+
+  for (let index = 0; index < uniquePages.length; index++) {
+    const pageNumber = uniquePages[index];
+    options?.onProgress?.({
+      current: index + 1,
+      total,
+      pageNumber,
+    });
+
+    if (pageNumber > pdfPageCount) {
+      failedPages.push({
+        pageNumber,
+        reason: `Page ${pageNumber} is out of range for a ${pdfPageCount}-page PDF.`,
+      });
+      continue;
+    }
+
+    try {
+      const page = await pdf.getPage(pageNumber);
+      const viewport = page.getViewport({ scale: renderScale });
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+
+      if (!context) {
+        failedPages.push({
+          pageNumber,
+          reason: "Unable to initialize canvas rendering context.",
+        });
+        continue;
+      }
+
+      canvas.height = viewport.height;
+      canvas.width = viewport.width;
+      await page.render({ canvasContext: context, viewport }).promise;
+
+      let imageDataUrl = canvas.toDataURL("image/png");
+      if (imageDataUrl.length > maxPngChars) {
+        imageDataUrl = canvas.toDataURL("image/jpeg", jpegFallbackQuality);
+        downgradedPages.push(pageNumber);
+      }
+
+      imagesByPage[pageNumber] = imageDataUrl;
+
+      canvas.width = 0;
+      canvas.height = 0;
+    } catch (error: any) {
+      failedPages.push({
+        pageNumber,
+        reason: String(error?.message || "Unknown render failure."),
+      });
+    }
+  }
+
+  return {
+    imagesByPage,
+    downgradedPages,
+    failedPages,
+  };
 };
 
 // --- "The Chatter" Analysis ---

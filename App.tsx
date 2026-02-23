@@ -5,6 +5,7 @@ import {
   convertPdfToImages,
   getPdfPageCount,
   parsePdfToText,
+  renderPdfPagesHighQuality,
 } from './services/geminiService';
 import {
   ModelType,
@@ -247,6 +248,16 @@ const isRetriableChunkError = (message: string): boolean => {
     normalized.includes("overload") ||
     normalized.includes("unable to process input image") ||
     normalized.includes("upstream")
+  );
+};
+
+const isLocationUnsupportedChunkError = (message: string): boolean => {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('upstream_location_unsupported') ||
+    normalized.includes('user location is not supported for the api use') ||
+    normalized.includes('location is not supported for the api use') ||
+    normalized.includes('provider location policy')
   );
 };
 
@@ -897,6 +908,7 @@ const App: React.FC = () => {
 
         const chunkResults: PointsAndFiguresResult[] = [];
         const failedChunks: string[] = [];
+        let locationBlockedChunkDetail: string | null = null;
 
         for (let chunkIndex = 0; chunkIndex < ranges.length; chunkIndex++) {
           const range = ranges[chunkIndex];
@@ -981,6 +993,11 @@ const App: React.FC = () => {
               break;
             } catch (error: any) {
               const errorMessage = String(error?.message || "Unknown chunk failure");
+              if (isLocationUnsupportedChunkError(errorMessage)) {
+                locationBlockedChunkDetail = `${chunkLabel} pages ${range.startPage}-${range.endPage}`;
+                break;
+              }
+
               const isRetriable = isRetriableChunkError(errorMessage);
               const isRateLimited = isRateLimitError(errorMessage);
               if (attempt < POINTS_CHUNK_MAX_RETRIES && isRetriable) {
@@ -1018,9 +1035,19 @@ const App: React.FC = () => {
             }
           }
 
+          if (locationBlockedChunkDetail) {
+            break;
+          }
+
           if (!chunkSucceeded) {
             continue;
           }
+        }
+
+        if (locationBlockedChunkDetail) {
+          throw new Error(
+            `Gemini is temporarily blocked by provider location policy for this environment. Stop now and retry later. Configure VERTEX_API_KEY in Cloudflare Pages for stronger failover. (${locationBlockedChunkDetail})`,
+          );
         }
 
         if (chunkResults.length === 0) {
@@ -1028,24 +1055,110 @@ const App: React.FC = () => {
           throw new Error(details);
         }
 
-        const result = mergePointsChunkResults(chunkResults);
-        if (result.slides.length === 0) {
+        const updateFinalizingProgress = (message: string, filePercent: number) => {
+          const boundedPercent = Math.max(90, Math.min(99, filePercent));
+          nextFiles[fileIndex] = {
+            ...nextFiles[fileIndex],
+            status: 'analyzing',
+            progress: {
+              stage: 'finalizing',
+              message,
+              percent: boundedPercent,
+            },
+          };
+          setPointsBatchFiles([...nextFiles]);
+
+          const { completed, failed } = getCounts();
+          const overallPercent = Math.round(((queueIndex + boundedPercent / 100) / pendingIndexes.length) * 100);
+          setPointsBatchProgress({
+            total: pendingIndexes.length,
+            completed,
+            failed,
+            currentLabel: nextFiles[fileIndex].name,
+            progress: {
+              stage: 'finalizing',
+              message,
+              percent: overallPercent,
+            },
+          });
+        };
+
+        const mergedResult = mergePointsChunkResults(chunkResults);
+        if (mergedResult.slides.length === 0) {
           throw new Error('No valid insight slides were selected across chunks.');
         }
+
+        let result = mergedResult;
+        const qualityWarnings: string[] = [];
+        const selectedPages = Array.from(
+          new Set(
+            mergedResult.slides
+              .map((slide) => slide.selectedPageNumber)
+              .filter((pageNumber) => Number.isInteger(pageNumber) && pageNumber > 0),
+          ),
+        ).sort((a, b) => a - b);
+
+        if (selectedPages.length > 0) {
+          updateFinalizingProgress('Finalizing: rendering selected slides in high quality...', 93);
+          try {
+            const highQualityRender = await renderPdfPagesHighQuality(nextFiles[fileIndex].file, selectedPages, {
+              scale: 2.0,
+              pngDataUrlMaxChars: 4_800_000,
+              jpegFallbackQuality: 0.92,
+              onProgress: ({ current, total, pageNumber }) => {
+                const ratio = total > 0 ? current / total : 1;
+                const finalizingPercent = Math.round(93 + ratio * 6);
+                updateFinalizingProgress(
+                  `Finalizing: rendering high-quality slide ${current}/${total} (page ${pageNumber})...`,
+                  finalizingPercent,
+                );
+              },
+            });
+
+            if (Object.keys(highQualityRender.imagesByPage).length > 0) {
+              result = {
+                ...mergedResult,
+                slides: mergedResult.slides.map((slide) => ({
+                  ...slide,
+                  pageAsImage: highQualityRender.imagesByPage[slide.selectedPageNumber] || slide.pageAsImage,
+                })),
+              };
+            }
+
+            if (highQualityRender.failedPages.length > 0) {
+              qualityWarnings.push(
+                `High-quality render failed for ${highQualityRender.failedPages.length} selected slide(s); using chunk-quality fallback for those pages.`,
+              );
+            }
+
+            if (highQualityRender.downgradedPages.length > 0) {
+              qualityWarnings.push(
+                `PNG output was oversized for ${highQualityRender.downgradedPages.length} selected slide(s); used high-quality JPEG fallback for those pages.`,
+              );
+            }
+          } catch (error: any) {
+            qualityWarnings.push(
+              `High-quality final render step failed (${String(error?.message || 'unknown error')}); using analysis-quality slide images.`,
+            );
+          }
+        }
+
         const partialWarning =
           failedChunks.length > 0 ? `Partial analysis: ${failedChunks.length} chunk(s) failed. ${failedChunks[0]}` : undefined;
+        const qualityWarning = qualityWarnings.length > 0 ? qualityWarnings.join(' ') : undefined;
+        const combinedWarning = [partialWarning, qualityWarning].filter(Boolean).join(' ').trim() || undefined;
         const completionMessage =
           result.slides.length < 3
             ? `Analysis complete with ${result.slides.length} high-signal slide${result.slides.length === 1 ? '' : 's'}.`
-            : partialWarning
-              ? 'Analysis complete with partial chunk coverage.'
+            : combinedWarning
+              ? 'Analysis complete with recoverable warnings.'
               : 'Analysis complete.';
 
         nextFiles[fileIndex] = {
           ...nextFiles[fileIndex],
           status: 'complete',
           result,
-          error: partialWarning,
+          error: combinedWarning,
           progress: {
             stage: 'complete',
             message: completionMessage,
