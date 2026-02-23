@@ -8,6 +8,7 @@ import {
   ThreadDraftResult,
   ThreadEditionSource,
   ThreadQuoteCandidate,
+  ThreadShortlistResult,
 } from "../types";
 
 const CHATTER_ANALYZE_ENDPOINT = "/api/chatter/analyze";
@@ -15,6 +16,7 @@ const POINTS_ANALYZE_ENDPOINT = "/api/points/analyze";
 const CHATTER_THREAD_INGEST_ENDPOINT = "/api/chatter/thread/ingest";
 const CHATTER_THREAD_GENERATE_ENDPOINT = "/api/chatter/thread/generate";
 const CHATTER_THREAD_REGENERATE_ENDPOINT = "/api/chatter/thread/regenerate";
+const CHATTER_THREAD_SHORTLIST_ENDPOINT = "/api/chatter/thread/shortlist";
 
 interface ApiErrorPayload {
   error?: {
@@ -380,7 +382,7 @@ export const renderPdfPagesHighQuality = async (
 export const analyzeTranscript = async (
   transcript: string,
   provider: ProviderType = ProviderType.GEMINI,
-  modelId: ModelType = ModelType.FLASH,
+  modelId: ModelType = ModelType.FLASH_3,
   onProgress?: (event: ProgressEvent) => void,
 ): Promise<ChatterAnalysisResult> => {
   if (!transcript.trim()) {
@@ -424,7 +426,7 @@ export const analyzePresentation = async (
   onProgress: (msg: string) => void,
   pageOffset = 0,
   provider: ProviderType = ProviderType.GEMINI,
-  modelId: ModelType = ModelType.FLASH,
+  modelId: ModelType = ModelType.FLASH_3,
   chunkRange?: { startPage: number; endPage: number },
 ): Promise<PointsAndFiguresResult> => {
   if (!Array.isArray(pageImages) || pageImages.length === 0) {
@@ -510,7 +512,7 @@ export const generateThreadDraft = async (
     industriesCovered?: number;
   },
   provider: ProviderType = ProviderType.GEMINI,
-  modelId: ModelType = ModelType.FLASH,
+  modelId: ModelType = ModelType.FLASH_3,
 ): Promise<ThreadDraftResult> => {
   if (!Array.isArray(selectedQuotes) || selectedQuotes.length === 0) {
     throw new Error("Select at least one quote to generate the thread.");
@@ -537,6 +539,33 @@ export const generateThreadDraft = async (
   };
 };
 
+export const shortlistThreadCandidates = async (
+  quotes: ThreadQuoteCandidate[],
+  provider: ProviderType = ProviderType.GEMINI,
+  modelId: ModelType = ModelType.FLASH_3,
+  options?: { maxCandidates?: number; maxPerCompany?: number },
+): Promise<ThreadShortlistResult> => {
+  if (!Array.isArray(quotes) || quotes.length === 0) {
+    throw new Error("Quote universe is empty.");
+  }
+
+  const result = await postJson<ThreadShortlistResult>(CHATTER_THREAD_SHORTLIST_ENDPOINT, {
+    provider,
+    model: modelId,
+    quotes,
+    maxCandidates: options?.maxCandidates,
+    maxPerCompany: options?.maxPerCompany,
+  });
+
+  if (!Array.isArray(result?.shortlistedQuoteIds)) {
+    throw new Error("Shortlist generation returned an invalid payload.");
+  }
+
+  return {
+    shortlistedQuoteIds: result.shortlistedQuoteIds.filter((id) => typeof id === "string" && id.trim().length > 0),
+  };
+};
+
 export const regenerateThreadTweet = async (params: {
   tweetKind: "intro" | "insight" | "outro";
   currentTweet: string;
@@ -551,7 +580,7 @@ export const regenerateThreadTweet = async (params: {
   modelId?: ModelType;
 }): Promise<string> => {
   const provider = params.provider ?? ProviderType.GEMINI;
-  const modelId = params.modelId ?? ModelType.FLASH;
+  const modelId = params.modelId ?? ModelType.FLASH_3;
 
   const result = await postJson<{ tweet: string }>(CHATTER_THREAD_REGENERATE_ENDPOINT, {
     provider,

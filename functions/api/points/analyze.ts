@@ -26,7 +26,7 @@ const FLASH_3_MODEL = "gemini-3-flash-preview";
 const PRO_MODEL = "gemini-3-pro-preview";
 const OPENROUTER_PRIMARY_MODEL = "minimax/minimax-01";
 const OPENROUTER_BACKUP_MODEL = "qwen/qwen3-vl-235b-a22b-instruct";
-const DEFAULT_MODEL = FLASH_MODEL;
+const DEFAULT_MODEL = FLASH_3_MODEL;
 const ALLOWED_MODELS = new Set([FLASH_MODEL, FLASH_3_MODEL, PRO_MODEL]);
 const OPENROUTER_ALLOWED_MODELS = new Set([OPENROUTER_PRIMARY_MODEL]);
 const IS_STRICT_VALIDATION: boolean = false;
@@ -324,6 +324,25 @@ const FINANCIAL_TERMS = [
   "volume",
 ];
 
+const JARGON_TERMS = [
+  "operating leverage",
+  "normalized",
+  "normalization",
+  "structural",
+  "trajectory",
+  "calibrated",
+  "prudential",
+  "asymmetric",
+  "inflection",
+  "dislocation",
+  "accretive",
+  "deleveraging",
+  "adjacency",
+  "granularity",
+  "read-through",
+  "read through",
+];
+
 interface SlideEntry {
   selectedPageNumber: number;
   context: string;
@@ -377,7 +396,11 @@ const contextNeedsRewrite = (value: string): { needsRewrite: boolean; reason: st
   const descriptiveHits = countTermHits(lower, DESCRIPTIVE_TERMS);
   const inferenceHits = countTermHits(lower, INFERENCE_TERMS);
   const financialHits = countTermHits(lower, FINANCIAL_TERMS);
+  const jargonHits = countTermHits(lower, JARGON_TERMS);
   const sentenceCount = splitSentences(value).length;
+  const wordCount = value.trim().split(/\s+/).filter(Boolean).length;
+  const avgWordsPerSentence = sentenceCount > 0 ? wordCount / sentenceCount : wordCount;
+  const longWordCount = (value.match(/\b[a-z]{14,}\b/gi) || []).length;
   const startsDescriptive = /^(this|the)\s+(slide|chart|table|graph)\b/i.test(value.trim());
 
   if (startsDescriptive || (descriptiveHits >= 2 && inferenceHits === 0)) {
@@ -390,6 +413,10 @@ const contextNeedsRewrite = (value: string): { needsRewrite: boolean; reason: st
 
   if (financialHits > 0 && inferenceHits === 0) {
     return { needsRewrite: true, reason: "financial_without_why" };
+  }
+
+  if (jargonHits >= 2 || longWordCount >= 2 || avgWordsPerSentence > 24) {
+    return { needsRewrite: true, reason: "jargon_dense" };
   }
 
   return { needsRewrite: false, reason: "ok" };
@@ -454,7 +481,7 @@ const buildRewritePrompt = (
   }));
 
   return [
-    "You are rewriting slide context for a portfolio-manager audience.",
+    "You are rewriting slide context for a smart non-specialist reader who wants sharp investor insight.",
     `Company: ${companyName || "Unknown"}`,
     `Industry: ${industry || "Unknown"}`,
     "",
@@ -463,6 +490,10 @@ const buildRewritePrompt = (
     "- Keep each context to exactly 2 short sentences where possible.",
     "- Sentence 1: hidden signal, likely driver, or read-between-the-lines interpretation.",
     "- Sentence 2: investor implication (durability, risk, margins, strategy, or industry structure).",
+    "- Use plain English and direct wording.",
+    "- Keep sentence length compact (roughly <= 22 words where possible).",
+    "- Limit jargon; use common finance words only when they add precision.",
+    "- Avoid abstract phrasing and stacked qualifiers.",
     "- Do not narrate obvious visuals from the slide.",
     "- If context is financial/result oriented, clearly explain why it matters now beyond headline numbers.",
     "",

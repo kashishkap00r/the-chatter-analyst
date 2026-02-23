@@ -115,6 +115,17 @@ export const THREAD_REGENERATE_RESPONSE_SCHEMA = {
   required: ["tweet"],
 };
 
+export const THREAD_SHORTLIST_RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    shortlistedQuoteIds: {
+      type: "ARRAY",
+      items: { type: "STRING" },
+    },
+  },
+  required: ["shortlistedQuoteIds"],
+};
+
 export const CHATTER_PROMPT = `
 ROLE & AUDIENCE
 You are a research analyst for "The Chatter | India Edition," a bi-weekly newsletter read by portfolio managers.
@@ -198,13 +209,19 @@ CONTEXT QUALITY RULES
 - Do not start context with phrases like "In this slide", "This slide shows", or "The slide shows".
 - Avoid vague narration; include concrete directionality or mix shift wherever visible (for example, share increase/decrease by segment).
 - If a financial/result slide is selected, explicitly justify why it is included now (what changed beneath headline numbers and why that matters).
-- Keep language simple, clear, and concise.
+- Write in balanced simple English: plain words first, sharp logic, minimal jargon.
+- Keep each sentence short and direct (roughly <= 22 words when possible).
+- Use common finance terms (for example: margin, mix, pricing, demand) only when they add precision.
+- Prefer concrete verbs (rose, fell, shifted, improved, weakened) over abstract wording.
+- Avoid consultant-like phrasing or dense jargon stacks.
 
 BAD VS GOOD EXAMPLES
 - Bad: "This slide shows segment revenue growth and margin trends across business lines."
 - Good: "Margin expansion despite slower headline growth suggests mix is moving toward higher-value products, not just cyclical demand support. If sustained, this points to better earnings quality and lower downside in a softer cycle."
 - Bad: "The chart presents loan book composition by product."
 - Good: "A rising share of unsecured/micro-ticket lending usually signals a push for yield and faster growth, but it also raises sensitivity to credit stress later in the cycle. That trade-off is central to judging whether current growth is durable."
+- Bad: "The portfolio displays a structurally accretive trajectory with calibrated operating leverage normalization."
+- Good: "Profit growth looks stronger because fixed costs are being spread over higher volumes. If this continues, earnings can stay resilient even if demand cools a bit."
 
 OUTPUT RULES
 - Return one JSON object with companyName, fiscalPeriod, nseScrip, marketCapCategory, industry, companyDescription, and slides.
@@ -274,6 +291,27 @@ QUALITY BAR
 
 OUTPUT
 - Return strict JSON only with: { "tweet": "..." }.
+`.trim();
+
+export const THREAD_SHORTLIST_PROMPT = `
+ROLE
+You are selecting the best candidate quotes for an X (Twitter) thread from The Chatter edition.
+
+GOAL
+- Build a high-signal shortlist from a larger quote universe.
+- Prefer quotes that are tweet-worthy, specific, and insight-rich.
+
+SELECTION PRINCIPLES
+- Prioritize non-obvious investor signal over routine quarter commentary.
+- Prefer quotes that reveal change, strategy, risk, competitive shift, capital allocation, demand trend, or business inflection.
+- Avoid repetitive points that say the same thing in different wording.
+- Keep company coverage reasonably diverse when quality is similar.
+
+OUTPUT RULES
+- Return JSON only in this shape: { "shortlistedQuoteIds": string[] }.
+- Include only quote IDs that are present in input.
+- Do not include duplicates.
+- Return up to maxCandidates IDs.
 `.trim();
 
 const parseGeminiText = (payload: any): string => {

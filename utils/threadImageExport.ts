@@ -7,11 +7,9 @@ const MIN_QUOTE_FONT = 26;
 
 const BRAND_BLUE = "#387ED1";
 const BRAND_DARK = "#424242";
-const BRAND_YELLOW = "#FFA412";
 const CANVAS_WHITE = "#FFFFFF";
 const SOFT_BG = "#F5F7FB";
 const STROKE = "#D5DDEB";
-const MUTED_TEXT = "#5B6472";
 
 const drawRoundedRect = (
   ctx: CanvasRenderingContext2D,
@@ -129,51 +127,32 @@ export const buildThreadQuoteImage = (quote: ThreadQuoteCandidate): string => {
   context.fillRect(0, 0, CARD_WIDTH, CARD_HEIGHT);
 
   drawRoundedRect(context, 28, 28, CARD_WIDTH - 56, CARD_HEIGHT - 56, 24, CANVAS_WHITE, STROKE);
-  drawRoundedRect(context, 28, 28, CARD_WIDTH - 56, 14, 7, BRAND_BLUE);
-
-  drawRoundedRect(context, 66, 92, 210, 42, 12, BRAND_BLUE);
+  drawRoundedRect(context, 66, 72, 350, 44, 12, BRAND_BLUE);
   context.fillStyle = CANVAS_WHITE;
   context.font = "700 20px Inter, Manrope, sans-serif";
   context.textBaseline = "middle";
-  context.fillText("The Chatter", 92, 113);
+  context.fillText("The Chatter by Zerodha", 92, 94);
 
-  context.fillStyle = BRAND_DARK;
-  context.font = "700 30px Inter, Manrope, sans-serif";
-  context.textBaseline = "alphabetic";
-  const companyLine = `${quote.companyName} | ${quote.marketCapCategory}`;
-  context.fillText(companyLine, 66, 188);
-
-  context.fillStyle = MUTED_TEXT;
-  context.font = "500 20px Inter, Manrope, sans-serif";
-  context.fillText(quote.industry, 66, 220);
-
-  drawRoundedRect(context, 66, 246, CARD_WIDTH - 132, 310, 18, SOFT_BG);
+  drawRoundedRect(context, 66, 142, CARD_WIDTH - 132, 385, 20, SOFT_BG);
 
   const renderedQuote = `"${quote.quote}"`;
-  const quoteBoxWidth = CARD_WIDTH - 188;
-  const quoteBoxHeight = 228;
+  const quoteBoxWidth = CARD_WIDTH - 208;
+  const quoteBoxHeight = 300;
   const quoteLayout = fitQuoteLayout(context, renderedQuote, quoteBoxWidth, quoteBoxHeight);
   context.fillStyle = BRAND_DARK;
   context.font = `700 ${quoteLayout.fontSize}px Inter, Manrope, sans-serif`;
-  let quoteY = 302;
+  context.textBaseline = "top";
+  let quoteY = 180;
   for (const line of quoteLayout.lines) {
-    context.fillText(line, 94, quoteY);
+    context.fillText(line, 104, quoteY);
     quoteY += quoteLayout.lineHeight;
   }
 
   const speakerLine = `- ${quote.speakerName}, ${quote.speakerDesignation}`;
   context.fillStyle = BRAND_BLUE;
-  context.font = "600 24px Inter, Manrope, sans-serif";
-  context.fillText(speakerLine, 94, 535);
-
-  context.fillStyle = BRAND_YELLOW;
-  context.beginPath();
-  context.arc(CARD_WIDTH - 86, 100, 8, 0, Math.PI * 2);
-  context.fill();
-
-  context.fillStyle = MUTED_TEXT;
-  context.font = "500 18px Inter, Manrope, sans-serif";
-  context.fillText("Source: The Chatter by Zerodha", 66, CARD_HEIGHT - 62);
+  context.font = "600 26px Inter, Manrope, sans-serif";
+  context.textBaseline = "alphabetic";
+  context.fillText(speakerLine, 104, CARD_HEIGHT - 86);
 
   return canvas.toDataURL("image/png");
 };
@@ -200,6 +179,33 @@ export const copyDataUrlImageToClipboard = async (dataUrl: string): Promise<void
     [blob.type || "image/png"]: blob,
   });
   await clipboard.write([clipboardItem]);
+};
+
+export const copyTextAndDataUrlImageToClipboard = async (
+  text: string,
+  dataUrl: string,
+): Promise<"combined" | "text"> => {
+  const clipboard = navigator?.clipboard;
+  if (!clipboard) {
+    throw new Error("Clipboard API is not available in this browser.");
+  }
+
+  if ((window as any).ClipboardItem && window.isSecureContext) {
+    try {
+      const blob = await dataUrlToBlob(dataUrl);
+      const clipboardItem = new (window as any).ClipboardItem({
+        "text/plain": new Blob([text], { type: "text/plain" }),
+        [blob.type || "image/png"]: blob,
+      });
+      await clipboard.write([clipboardItem]);
+      return "combined";
+    } catch {
+      // Fallback to text-only copy if combined clipboard write is not supported.
+    }
+  }
+
+  await clipboard.writeText(text);
+  return "text";
 };
 
 export const downloadDataUrlImage = (dataUrl: string, fileName: string): void => {

@@ -2,8 +2,8 @@ import {
   callGeminiJson,
   callOpenRouterJson,
   normalizeGeminiProviderPreference,
-  THREAD_DRAFT_PROMPT,
-  THREAD_DRAFT_RESPONSE_SCHEMA,
+  THREAD_SHORTLIST_PROMPT,
+  THREAD_SHORTLIST_RESPONSE_SCHEMA,
 } from "../../../_shared/gemini";
 
 interface Env {
@@ -15,7 +15,7 @@ interface Env {
   OPENROUTER_APP_TITLE?: string;
 }
 
-interface SelectedThreadQuote {
+interface ThreadQuoteCandidateInput {
   id: string;
   companyName: string;
   marketCapCategory: string;
@@ -26,16 +26,7 @@ interface SelectedThreadQuote {
   speakerDesignation: string;
 }
 
-interface ThreadEditionMetadata {
-  editionTitle: string;
-  editionUrl?: string;
-  editionDate?: string;
-  companiesCovered?: number;
-  industriesCovered?: number;
-}
-
-const MAX_BODY_BYTES = 2 * 1024 * 1024;
-const MAX_QUOTES = 30;
+const MAX_BODY_BYTES = 3 * 1024 * 1024;
 const PROVIDER_GEMINI = "gemini";
 const PROVIDER_OPENROUTER = "openrouter";
 const DEFAULT_PROVIDER = PROVIDER_GEMINI;
@@ -49,7 +40,9 @@ const ALLOWED_MODELS = new Set([FLASH_MODEL, FLASH_3_MODEL, PRO_MODEL]);
 const OPENROUTER_ALLOWED_MODELS = new Set([OPENROUTER_PRIMARY_MODEL]);
 const UPSTREAM_DEPENDENCY_STATUS = 424;
 const VALIDATION_STATUS = 422;
-const MAX_TWEET_CHARS = 260;
+const DEFAULT_MAX_CANDIDATES = 25;
+const MAX_ALLOWED_CANDIDATES = 40;
+const DEFAULT_MAX_PER_COMPANY = 2;
 
 const json = (payload: unknown, status = 200): Response =>
   new Response(JSON.stringify(payload), {
@@ -140,25 +133,10 @@ const isLocationUnsupportedError = (message: string): boolean => {
 const isUpstreamTransientError = (message: string): boolean =>
   isOverloadError(message) || isTimeoutError(message) || message.includes("500") || message.includes("502") || message.includes("504");
 
-const normalizeTweet = (value: unknown): string => {
-  if (typeof value !== "string") return "";
-  const normalized = value
-    .replace(/\r/g, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/[ ]{2,}/g, " ")
-    .trim();
-  if (normalized.length <= MAX_TWEET_CHARS) {
-    return normalized;
-  }
-  return `${normalized.slice(0, MAX_TWEET_CHARS - 1).trimEnd()}…`;
-};
-
-const fallbackInsightTweet = (quote: SelectedThreadQuote): string => {
-  const base = `${quote.companyName}: ${quote.summary}`.replace(/\s+/g, " ").trim();
-  if (base.length <= MAX_TWEET_CHARS) {
-    return base;
-  }
-  return `${base.slice(0, MAX_TWEET_CHARS - 1).trimEnd()}…`;
+const normalizeText = (value: string, maxChars: number): string => {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxChars) return normalized;
+  return `${normalized.slice(0, maxChars - 1).trimEnd()}…`;
 };
 
 const validateQuote = (quote: any, index: number): string | null => {
@@ -182,53 +160,120 @@ const validateQuote = (quote: any, index: number): string | null => {
   return null;
 };
 
-const normalizeDraftResult = (
-  rawResult: any,
-  selectedQuotes: SelectedThreadQuote[],
-  editionMetadata: ThreadEditionMetadata,
-): { introTweet: string; insightTweets: Array<{ quoteId: string; tweet: string }>; outroTweet: string } => {
-  const introFallback = `Q results season is in full swing and management commentary is packed with signal. Here are the standout nuggets from this edition of The Chatter.`;
-  const outroFallback = editionMetadata.editionUrl
-    ? `For the full breakdown, read the complete edition here: ${editionMetadata.editionUrl}`
-    : `For the full breakdown, read the complete edition on The Chatter.`;
+const SIGNAL_TERMS = [
+  "guidance",
+  "pricing",
+  "margin",
+  "mix",
+  "demand",
+  "capacity",
+  "allocation",
+  "capex",
+  "risk",
+  "competition",
+  "share",
+  "strategy",
+  "inflection",
+  "structural",
+  "regulatory",
+  "pipeline",
+  "utilization",
+  "credit",
+  "order book",
+  "moat",
+  "transformation",
+  "turnaround",
+  "pivot",
+  "runway",
+  "acquisition",
+  "divestment",
+];
 
-  const introTweet = normalizeTweet(rawResult?.introTweet) || introFallback;
-  const outroTweet = normalizeTweet(rawResult?.outroTweet) || outroFallback;
+const NOISE_TERMS = [
+  "qoq",
+  "yoy",
+  "quarter",
+  "last quarter",
+  "sequential",
+  "reported",
+  "year-on-year",
+];
 
-  const candidateInsights: Array<{ quoteId: string; tweet: string }> = Array.isArray(rawResult?.insightTweets)
-    ? rawResult.insightTweets
-        .map((item: any) => ({
-          quoteId: hasNonEmptyString(item?.quoteId) ? item.quoteId.trim() : "",
-          tweet: normalizeTweet(item?.tweet),
-        }))
-        .filter((item) => item.quoteId && item.tweet)
-    : [];
+const scoreQuote = (quote: ThreadQuoteCandidateInput): number => {
+  const content = `${quote.summary} ${quote.quote}`.toLowerCase();
+  const signalHits = SIGNAL_TERMS.reduce((sum, term) => sum + (content.includes(term) ? 1 : 0), 0);
+  const noiseHits = NOISE_TERMS.reduce((sum, term) => sum + (content.includes(term) ? 1 : 0), 0);
 
-  const byQuoteId = new Map<string, string>();
-  for (const item of candidateInsights) {
-    if (!byQuoteId.has(item.quoteId)) {
-      byQuoteId.set(item.quoteId, item.tweet);
+  const summaryLen = quote.summary.length;
+  const quoteLen = quote.quote.length;
+  const lenPenalty = summaryLen > 420 ? 1 : 0;
+  const qualityBonus = quoteLen >= 90 && quoteLen <= 420 ? 1 : 0;
+
+  return signalHits * 3 + qualityBonus - noiseHits - lenPenalty;
+};
+
+const buildLocalRanking = (quotes: ThreadQuoteCandidateInput[]): ThreadQuoteCandidateInput[] =>
+  [...quotes].sort((left, right) => {
+    const scoreDiff = scoreQuote(right) - scoreQuote(left);
+    if (scoreDiff !== 0) return scoreDiff;
+    return left.id.localeCompare(right.id);
+  });
+
+const enforceCapAndTake = (
+  orderedIds: string[],
+  quoteById: Map<string, ThreadQuoteCandidateInput>,
+  maxCandidates: number,
+  maxPerCompany: number,
+): string[] => {
+  const result: string[] = [];
+  const companyCounts = new Map<string, number>();
+
+  for (const id of orderedIds) {
+    const quote = quoteById.get(id);
+    if (!quote) continue;
+
+    const companyKey = quote.companyName.toLowerCase().trim();
+    const currentCount = companyCounts.get(companyKey) ?? 0;
+    if (currentCount >= maxPerCompany) {
+      continue;
+    }
+
+    result.push(id);
+    companyCounts.set(companyKey, currentCount + 1);
+
+    if (result.length >= maxCandidates) {
+      break;
     }
   }
 
-  const insightTweets = selectedQuotes.map((quote, index) => {
-    const mapped = byQuoteId.get(quote.id);
-    if (mapped) {
-      return { quoteId: quote.id, tweet: mapped };
-    }
+  return result;
+};
 
-    const fallbackByIndex = candidateInsights[index]?.tweet;
-    return {
-      quoteId: quote.id,
-      tweet: fallbackByIndex || fallbackInsightTweet(quote),
-    };
-  });
+const mergeAndFillIds = (params: {
+  preferredIds: string[];
+  fallbackOrder: string[];
+  quoteById: Map<string, ThreadQuoteCandidateInput>;
+  maxCandidates: number;
+  maxPerCompany: number;
+}): string[] => {
+  const { preferredIds, fallbackOrder, quoteById, maxCandidates, maxPerCompany } = params;
+  const seen = new Set<string>();
+  const combined: string[] = [];
 
-  return {
-    introTweet,
-    insightTweets,
-    outroTweet,
-  };
+  for (const id of [...preferredIds, ...fallbackOrder]) {
+    if (!id || seen.has(id)) continue;
+    if (!quoteById.has(id)) continue;
+    seen.add(id);
+    combined.push(id);
+  }
+
+  return enforceCapAndTake(combined, quoteById, maxCandidates, maxPerCompany);
+};
+
+const normalizeShortlistPayload = (value: any): string[] => {
+  if (!value || typeof value !== "object") return [];
+  const ids = Array.isArray(value.shortlistedQuoteIds) ? value.shortlistedQuoteIds : [];
+  return ids.filter((id): id is string => typeof id === "string" && id.trim().length > 0).map((id) => id.trim());
 };
 
 export async function onRequestPost(context: any): Promise<Response> {
@@ -267,25 +312,34 @@ export async function onRequestPost(context: any): Promise<Response> {
     return error(400, "BAD_REQUEST", "Field 'model' is invalid for provider 'openrouter'.", "INVALID_MODEL");
   }
 
-  const selectedQuotes = Array.isArray(body?.selectedQuotes) ? body.selectedQuotes : [];
-  if (selectedQuotes.length === 0) {
-    return error(400, "BAD_REQUEST", "Field 'selectedQuotes' must contain at least one quote.", "MISSING_QUOTES");
-  }
-  if (selectedQuotes.length > MAX_QUOTES) {
-    return error(400, "BAD_REQUEST", `Field 'selectedQuotes' allows at most ${MAX_QUOTES} quotes.`, "TOO_MANY_QUOTES");
+  const maxCandidatesRaw = Number(body?.maxCandidates);
+  const maxCandidates =
+    Number.isFinite(maxCandidatesRaw) && maxCandidatesRaw > 0
+      ? Math.min(MAX_ALLOWED_CANDIDATES, Math.floor(maxCandidatesRaw))
+      : DEFAULT_MAX_CANDIDATES;
+
+  const maxPerCompanyRaw = Number(body?.maxPerCompany);
+  const maxPerCompany =
+    Number.isFinite(maxPerCompanyRaw) && maxPerCompanyRaw > 0
+      ? Math.min(6, Math.floor(maxPerCompanyRaw))
+      : DEFAULT_MAX_PER_COMPANY;
+
+  const quoteInputs = Array.isArray(body?.quotes) ? body.quotes : [];
+  if (quoteInputs.length === 0) {
+    return error(400, "BAD_REQUEST", "Field 'quotes' must contain at least one item.", "MISSING_QUOTES");
   }
 
-  const seenIds = new Set<string>();
-  const validatedQuotes: SelectedThreadQuote[] = [];
+  const quoteById = new Map<string, ThreadQuoteCandidateInput>();
+  const normalizedQuotes: ThreadQuoteCandidateInput[] = [];
 
-  for (let i = 0; i < selectedQuotes.length; i++) {
-    const quote = selectedQuotes[i];
+  for (let i = 0; i < quoteInputs.length; i++) {
+    const quote = quoteInputs[i];
     const validationError = validateQuote(quote, i);
     if (validationError) {
       return error(400, "BAD_REQUEST", validationError, "INVALID_QUOTE");
     }
 
-    const normalizedQuote: SelectedThreadQuote = {
+    const normalized: ThreadQuoteCandidateInput = {
       id: quote.id.trim(),
       companyName: quote.companyName.trim(),
       marketCapCategory: quote.marketCapCategory.trim(),
@@ -296,30 +350,15 @@ export async function onRequestPost(context: any): Promise<Response> {
       speakerDesignation: quote.speakerDesignation.trim(),
     };
 
-    if (seenIds.has(normalizedQuote.id)) {
-      return error(400, "BAD_REQUEST", `Duplicate quote id '${normalizedQuote.id}' found.`, "DUPLICATE_QUOTE_ID");
+    if (!quoteById.has(normalized.id)) {
+      quoteById.set(normalized.id, normalized);
+      normalizedQuotes.push(normalized);
     }
-    seenIds.add(normalizedQuote.id);
-    validatedQuotes.push(normalizedQuote);
   }
 
-  const editionMetadata: ThreadEditionMetadata = {
-    editionTitle: hasNonEmptyString(body?.editionMetadata?.editionTitle)
-      ? body.editionMetadata.editionTitle.trim()
-      : "The Chatter",
-    editionUrl: hasNonEmptyString(body?.editionMetadata?.editionUrl)
-      ? body.editionMetadata.editionUrl.trim()
-      : undefined,
-    editionDate: hasNonEmptyString(body?.editionMetadata?.editionDate)
-      ? body.editionMetadata.editionDate.trim()
-      : undefined,
-    companiesCovered: Number.isFinite(Number(body?.editionMetadata?.companiesCovered))
-      ? Number(body.editionMetadata.companiesCovered)
-      : undefined,
-    industriesCovered: Number.isFinite(Number(body?.editionMetadata?.industriesCovered))
-      ? Number(body.editionMetadata.industriesCovered)
-      : undefined,
-  };
+  if (normalizedQuotes.length === 0) {
+    return error(400, "BAD_REQUEST", "No valid quotes found after normalization.", "NO_VALID_QUOTES");
+  }
 
   const geminiApiKey = env?.GEMINI_API_KEY;
   const openRouterApiKey = env?.OPENROUTER_API_KEY;
@@ -330,17 +369,30 @@ export async function onRequestPost(context: any): Promise<Response> {
     return error(500, "INTERNAL", "Server is missing OPENROUTER_API_KEY.", "MISSING_OPENROUTER_KEY");
   }
 
+  const localRanking = buildLocalRanking(normalizedQuotes);
+  const fallbackOrder = localRanking.map((quote) => quote.id);
+
   const modelAttemptOrder =
     provider === PROVIDER_GEMINI ? getModelAttemptOrder(model) : getOpenRouterAttemptOrder(model);
   const providerPreference =
     provider === PROVIDER_GEMINI ? normalizeGeminiProviderPreference(env?.GEMINI_PROVIDER) : undefined;
 
-  const inputPayload = {
-    editionMetadata,
-    selectedQuotes: validatedQuotes,
+  const shortlistInput = {
+    maxCandidates,
+    maxPerCompany,
+    quotes: normalizedQuotes.map((quote) => ({
+      id: quote.id,
+      companyName: quote.companyName,
+      marketCapCategory: quote.marketCapCategory,
+      industry: quote.industry,
+      summary: normalizeText(quote.summary, 220),
+      quote: normalizeText(quote.quote, 360),
+      speakerName: quote.speakerName,
+      speakerDesignation: quote.speakerDesignation,
+    })),
   };
 
-  const inputText = `${THREAD_DRAFT_PROMPT}\n\nINPUT JSON:\n${JSON.stringify(inputPayload)}`;
+  const inputText = `${THREAD_SHORTLIST_PROMPT}\n\nINPUT JSON:\n${JSON.stringify(shortlistInput)}`;
 
   let lastMessage = "Unknown error";
   for (let attemptIndex = 0; attemptIndex < modelAttemptOrder.length; attemptIndex++) {
@@ -355,7 +407,7 @@ export async function onRequestPost(context: any): Promise<Response> {
               vertexApiKey: env?.VERTEX_API_KEY,
               model: attemptModel,
               contents: [{ role: "user", parts: [{ text: inputText }] }],
-              responseSchema: THREAD_DRAFT_RESPONSE_SCHEMA,
+              responseSchema: THREAD_SHORTLIST_RESPONSE_SCHEMA,
               providerPreference,
               requestId,
             })
@@ -368,10 +420,18 @@ export async function onRequestPost(context: any): Promise<Response> {
               appTitle: env?.OPENROUTER_APP_TITLE,
             });
 
-      const normalized = normalizeDraftResult(result, validatedQuotes, editionMetadata);
-      return json(normalized);
+      const aiIds = normalizeShortlistPayload(result);
+      const shortlistedQuoteIds = mergeAndFillIds({
+        preferredIds: aiIds,
+        fallbackOrder,
+        quoteById,
+        maxCandidates,
+        maxPerCompany,
+      });
+
+      return json({ shortlistedQuoteIds });
     } catch (analysisError: any) {
-      const message = String(analysisError?.message || "Thread generation failed.");
+      const message = String(analysisError?.message || "Thread shortlist generation failed.");
       lastMessage = message;
 
       const retryAfterSeconds = extractRetryAfterSeconds(message);
@@ -417,7 +477,7 @@ export async function onRequestPost(context: any): Promise<Response> {
         continue;
       }
 
-      return error(VALIDATION_STATUS, "VALIDATION_FAILED", message, "THREAD_GENERATION_FAILED", {
+      return error(VALIDATION_STATUS, "VALIDATION_FAILED", message, "THREAD_SHORTLIST_FAILED", {
         requestId,
         provider,
         model: attemptModel,

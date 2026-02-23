@@ -107,8 +107,8 @@ const POINTS_RETRY_RENDER_PROFILES = [
 ];
 
 const GEMINI_MODEL_OPTIONS: Array<{ value: ModelType; label: string }> = [
-  { value: ModelType.FLASH, label: "Gemini 2.5 Flash (Fast)" },
   { value: ModelType.FLASH_3, label: "Gemini 3 Flash (Balanced)" },
+  { value: ModelType.FLASH, label: "Gemini 2.5 Flash (Fast)" },
   { value: ModelType.PRO, label: "Gemini 3 Pro (Deep)" },
 ];
 
@@ -327,11 +327,12 @@ const formatSavedTimestamp = (timestamp: number): string => {
 const App: React.FC = () => {
   const [appMode, setAppMode] = useState<AppMode>('chatter');
   const [inputMode, setInputMode] = useState<'text' | 'file'>('file');
+  const [chatterPane, setChatterPane] = useState<'analysis' | 'thread'>('analysis');
   const [textInput, setTextInput] = useState('');
   const [provider, setProvider] = useState<ProviderType>(ProviderType.GEMINI);
-  const [geminiModel, setGeminiModel] = useState<ModelType>(ModelType.FLASH);
+  const [geminiModel, setGeminiModel] = useState<ModelType>(ModelType.FLASH_3);
   const [openRouterModel, setOpenRouterModel] = useState<ModelType>(ModelType.OPENROUTER_MINIMAX);
-  const [geminiPointsModel, setGeminiPointsModel] = useState<ModelType>(ModelType.FLASH);
+  const [geminiPointsModel, setGeminiPointsModel] = useState<ModelType>(ModelType.FLASH_3);
   const [openRouterPointsModel, setOpenRouterPointsModel] = useState<ModelType>(ModelType.OPENROUTER_MINIMAX);
 
   const [batchFiles, setBatchFiles] = useState<BatchFile[]>([]);
@@ -1500,105 +1501,128 @@ const App: React.FC = () => {
 
   const renderChatterResults = () => (
     <section className="lg:col-span-7 space-y-6">
-      <ThreadComposer provider={provider} model={selectedChatterModel} disabled={isResumeDecisionPending} />
+      <div className="inline-flex rounded-xl border border-line bg-white p-1">
+        <button
+          onClick={() => setChatterPane('analysis')}
+          className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
+            chatterPane === 'analysis' ? 'bg-canvas text-ink shadow-sm' : 'text-stone hover:text-ink'
+          }`}
+        >
+          Quote Analysis
+        </button>
+        <button
+          onClick={() => setChatterPane('thread')}
+          className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
+            chatterPane === 'thread' ? 'bg-canvas text-ink shadow-sm' : 'text-stone hover:text-ink'
+          }`}
+        >
+          Tweet Generator
+        </button>
+      </div>
 
-      {completedResults.length > 0 && (
-        <div className="rounded-2xl border border-line bg-white shadow-panel p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <p className="text-sm text-stone">
-            {completedResults.length} compan{completedResults.length === 1 ? 'y' : 'ies'} ready for newsletter export.
-          </p>
-          <button
-            onClick={handleCopyAllChatter}
-            className={`inline-flex items-center justify-center rounded-xl border px-4 py-2 text-sm font-semibold transition ${
-              copyAllStatus === 'copied'
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                : 'border-brand bg-brand text-white hover:bg-brand/90'
-            }`}
-          >
-            {copyAllStatus === 'copied' ? 'Copied All' : 'Copy All'}
-          </button>
-        </div>
-      )}
-
-      {copyAllStatus === 'error' && copyAllErrorMessage && (
-        <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{copyAllErrorMessage}</div>
-      )}
-
-      {isTextLoading && (
+      {chatterPane === 'thread' ? (
+        <ThreadComposer provider={provider} model={selectedChatterModel} disabled={isResumeDecisionPending} />
+      ) : (
         <>
-          <AnalysisProgressPanel
-            title="Transcript Analysis Running"
-            subtitle="We are extracting the highest-signal quotes and context."
-            progress={chatterSingleState.progress}
-          />
-          <QuoteSkeleton />
-          <QuoteSkeleton />
-          <QuoteSkeleton />
-        </>
-      )}
-
-      {isAnalyzingBatch && batchProgress && (
-        <>
-          <AnalysisProgressPanel
-            title="Batch Analysis Running"
-            subtitle="Files are processed sequentially for cleaner, deterministic results."
-            progress={batchProgress.progress}
-            batchStats={{
-              completed: batchProgress.completed,
-              failed: batchProgress.failed,
-              total: batchProgress.total,
-              currentLabel: batchProgress.currentLabel,
-            }}
-          />
-          <QuoteSkeleton />
-          <QuoteSkeleton />
-        </>
-      )}
-
-      {chatterSingleState.status === 'error' && (
-        <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
-          {chatterSingleState.errorMessage}
-        </div>
-      )}
-
-      {completedResults.length === 0 && !isChatterLoading && chatterSingleState.status !== 'error' && (
-        <div className="rounded-2xl border border-dashed border-line bg-white/70 p-10 text-center shadow-panel">
-          <h3 className="font-serif text-2xl text-ink">Ready to analyze</h3>
-          <p className="text-sm text-stone mt-2">
-            Upload transcripts or paste text, then run analysis to generate quote-ready insight cards.
-          </p>
-        </div>
-      )}
-
-      {chatterSingleState.status === 'complete' && chatterSingleState.result && (
-        <div className="space-y-4">
-          <div>
-            <h2 className="font-serif text-3xl text-ink">{chatterSingleState.result.companyName}</h2>
-            <p className="text-sm text-stone">{chatterSingleState.result.fiscalPeriod}</p>
-          </div>
-          <div className="space-y-4">
-            {chatterSingleState.result.quotes.map((quote, index) => (
-              <QuoteCard key={`single-${index}`} quoteData={quote} index={index} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {batchFiles
-        .filter((file) => file.result)
-        .map((file) => (
-          <div key={file.id} className="space-y-4">
-            <div>
-              <h2 className="font-serif text-3xl text-ink">{file.result?.companyName}</h2>
-              <p className="text-sm text-stone">{file.result?.fiscalPeriod}</p>
+          {completedResults.length > 0 && (
+            <div className="rounded-2xl border border-line bg-white shadow-panel p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <p className="text-sm text-stone">
+                {completedResults.length} compan{completedResults.length === 1 ? 'y' : 'ies'} ready for newsletter export.
+              </p>
+              <button
+                onClick={handleCopyAllChatter}
+                className={`inline-flex items-center justify-center rounded-xl border px-4 py-2 text-sm font-semibold transition ${
+                  copyAllStatus === 'copied'
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                    : 'border-brand bg-brand text-white hover:bg-brand/90'
+                }`}
+              >
+                {copyAllStatus === 'copied' ? 'Copied All' : 'Copy All'}
+              </button>
             </div>
+          )}
+
+          {copyAllStatus === 'error' && copyAllErrorMessage && (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{copyAllErrorMessage}</div>
+          )}
+
+          {isTextLoading && (
+            <>
+              <AnalysisProgressPanel
+                title="Transcript Analysis Running"
+                subtitle="We are extracting the highest-signal quotes and context."
+                progress={chatterSingleState.progress}
+              />
+              <QuoteSkeleton />
+              <QuoteSkeleton />
+              <QuoteSkeleton />
+            </>
+          )}
+
+          {isAnalyzingBatch && batchProgress && (
+            <>
+              <AnalysisProgressPanel
+                title="Batch Analysis Running"
+                subtitle="Files are processed sequentially for cleaner, deterministic results."
+                progress={batchProgress.progress}
+                batchStats={{
+                  completed: batchProgress.completed,
+                  failed: batchProgress.failed,
+                  total: batchProgress.total,
+                  currentLabel: batchProgress.currentLabel,
+                }}
+              />
+              <QuoteSkeleton />
+              <QuoteSkeleton />
+            </>
+          )}
+
+          {chatterSingleState.status === 'error' && (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+              {chatterSingleState.errorMessage}
+            </div>
+          )}
+
+          {completedResults.length === 0 && !isChatterLoading && chatterSingleState.status !== 'error' && (
+            <div className="rounded-2xl border border-dashed border-line bg-white/70 p-10 text-center shadow-panel">
+              <h3 className="font-serif text-2xl text-ink">Ready to analyze</h3>
+              <p className="text-sm text-stone mt-2">
+                Upload transcripts or paste text, then run analysis to generate quote-ready insight cards.
+              </p>
+            </div>
+          )}
+
+          {chatterSingleState.status === 'complete' && chatterSingleState.result && (
             <div className="space-y-4">
-              {file.result?.quotes.map((quote, index) => (
-                <QuoteCard key={`${file.id}-${index}`} quoteData={quote} index={index} />
-              ))}
+              <div>
+                <h2 className="font-serif text-3xl text-ink">{chatterSingleState.result.companyName}</h2>
+                <p className="text-sm text-stone">{chatterSingleState.result.fiscalPeriod}</p>
+              </div>
+              <div className="space-y-4">
+                {chatterSingleState.result.quotes.map((quote, index) => (
+                  <QuoteCard key={`single-${index}`} quoteData={quote} index={index} />
+                ))}
+              </div>
             </div>
-          </div>
-        ))}
+          )}
+
+          {batchFiles
+            .filter((file) => file.result)
+            .map((file) => (
+              <div key={file.id} className="space-y-4">
+                <div>
+                  <h2 className="font-serif text-3xl text-ink">{file.result?.companyName}</h2>
+                  <p className="text-sm text-stone">{file.result?.fiscalPeriod}</p>
+                </div>
+                <div className="space-y-4">
+                  {file.result?.quotes.map((quote, index) => (
+                    <QuoteCard key={`${file.id}-${index}`} quoteData={quote} index={index} />
+                  ))}
+                </div>
+              </div>
+            ))}
+        </>
+      )}
     </section>
   );
 

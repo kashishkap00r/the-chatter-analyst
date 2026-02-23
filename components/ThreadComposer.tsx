@@ -5,6 +5,7 @@ import {
   ingestThreadEditionFromText,
   parsePdfToText,
   regenerateThreadTweet,
+  shortlistThreadCandidates,
 } from "../services/geminiService";
 import type {
   ModelType,
@@ -16,6 +17,7 @@ import {
   buildThreadCardFileName,
   buildThreadQuoteImage,
   copyDataUrlImageToClipboard,
+  copyTextAndDataUrlImageToClipboard,
   downloadDataUrlImage,
 } from "../utils/threadImageExport";
 
@@ -39,6 +41,7 @@ interface PersistedThreadComposerState {
   schemaVersion: 1;
   substackUrl: string;
   source: ThreadEditionSource | null;
+  shortlistedQuoteIds?: string[];
   selectedQuoteIds: string[];
   tweets: ThreadTweetCard[];
 }
@@ -56,6 +59,9 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
   const [ingestStatus, setIngestStatus] = useState<ComposerStatus>("idle");
   const [ingestError, setIngestError] = useState("");
   const [source, setSource] = useState<ThreadEditionSource | null>(null);
+  const [shortlistStatus, setShortlistStatus] = useState<ComposerStatus>("idle");
+  const [shortlistError, setShortlistError] = useState("");
+  const [shortlistedQuoteIds, setShortlistedQuoteIds] = useState<string[]>([]);
   const [selectedQuoteIds, setSelectedQuoteIds] = useState<string[]>([]);
 
   const [threadStatus, setThreadStatus] = useState<ComposerStatus>("idle");
@@ -70,6 +76,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
   const [imageActionError, setImageActionError] = useState<string>("");
 
   const pdfInputRef = useRef<HTMLInputElement>(null);
+  const shortlistRunTokenRef = useRef(0);
 
   const allQuotes = useMemo(() => {
     if (!source) return [] as ThreadQuoteCandidate[];
@@ -84,6 +91,12 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
     return map;
   }, [allQuotes]);
 
+  const shortlistedQuotes = useMemo(() => {
+    return shortlistedQuoteIds
+      .map((id) => quoteById.get(id))
+      .filter((quote): quote is ThreadQuoteCandidate => Boolean(quote));
+  }, [quoteById, shortlistedQuoteIds]);
+
   const selectedQuotes = useMemo(() => {
     return selectedQuoteIds
       .map((id) => quoteById.get(id))
@@ -92,6 +105,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
 
   const selectedCount = selectedQuotes.length;
   const totalQuoteCount = allQuotes.length;
+  const shortlistedCount = shortlistedQuotes.length;
 
   useEffect(() => {
     try {
@@ -102,9 +116,12 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
 
       setSubstackUrl(typeof parsed.substackUrl === "string" ? parsed.substackUrl : "");
       setSource(parsed.source ?? null);
+      setShortlistedQuoteIds(Array.isArray(parsed.shortlistedQuoteIds) ? parsed.shortlistedQuoteIds : []);
       setSelectedQuoteIds(Array.isArray(parsed.selectedQuoteIds) ? parsed.selectedQuoteIds : []);
       setTweets(Array.isArray(parsed.tweets) ? parsed.tweets : []);
       setIngestStatus(parsed.source ? "ready" : "idle");
+      setShortlistStatus(parsed.source && Array.isArray(parsed.shortlistedQuoteIds) ? "ready" : "idle");
+      setShortlistError("");
       setThreadStatus(Array.isArray(parsed.tweets) && parsed.tweets.length > 0 ? "ready" : "idle");
     } catch {
       // Ignore invalid stored state and start fresh.
@@ -116,6 +133,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
       schemaVersion: 1,
       substackUrl,
       source,
+      shortlistedQuoteIds,
       selectedQuoteIds,
       tweets,
     };
@@ -125,7 +143,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
     } catch {
       // Ignore storage write failures; feature remains functional.
     }
-  }, [selectedQuoteIds, source, substackUrl, tweets]);
+  }, [selectedQuoteIds, shortlistedQuoteIds, source, substackUrl, tweets]);
 
   const setFeedbackForTweet = (tweetId: string, message: string) => {
     setTweetFeedback((prev) => ({ ...prev, [tweetId]: message }));
@@ -150,6 +168,71 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
     setImageCache({});
   };
 
+  const resetComposer = () => {
+    shortlistRunTokenRef.current = Date.now();
+    setSubstackUrl("");
+    setIngestStatus("idle");
+    setIngestError("");
+    setSource(null);
+    setShortlistStatus("idle");
+    setShortlistError("");
+    setShortlistedQuoteIds([]);
+    setSelectedQuoteIds([]);
+    clearThreadDraft();
+    try {
+      window.localStorage.removeItem(THREAD_COMPOSER_STORAGE_KEY);
+    } catch {
+      // Ignore storage failures.
+    }
+  };
+
+  const buildShortlist = async (nextSource: ThreadEditionSource) => {
+    const token = Date.now() + Math.random();
+    shortlistRunTokenRef.current = token;
+
+    const quoteUniverse = nextSource.companies.flatMap((company) => company.quotes);
+    if (quoteUniverse.length === 0) {
+      setShortlistedQuoteIds([]);
+      setShortlistStatus("ready");
+      setShortlistError("");
+      return;
+    }
+
+    if (quoteUniverse.length <= 25) {
+      setShortlistedQuoteIds(quoteUniverse.map((quote) => quote.id));
+      setShortlistStatus("ready");
+      setShortlistError("");
+      return;
+    }
+
+    setShortlistStatus("loading");
+    setShortlistError("");
+
+    try {
+      const shortlist = await shortlistThreadCandidates(quoteUniverse, provider, model, {
+        maxCandidates: 25,
+        maxPerCompany: 2,
+      });
+
+      if (shortlistRunTokenRef.current !== token) {
+        return;
+      }
+
+      const quoteIdSet = new Set(quoteUniverse.map((quote) => quote.id));
+      const normalizedIds = shortlist.shortlistedQuoteIds.filter((id) => quoteIdSet.has(id));
+      setShortlistedQuoteIds(normalizedIds);
+      setShortlistStatus("ready");
+      setShortlistError("");
+    } catch (error: any) {
+      if (shortlistRunTokenRef.current !== token) {
+        return;
+      }
+      setShortlistStatus("error");
+      setShortlistError(String(error?.message || "Unable to build Top 25 shortlist."));
+      setShortlistedQuoteIds([]);
+    }
+  };
+
   const hydrateGeneratedImages = (quotes: ThreadQuoteCandidate[]) => {
     const next: Record<string, string> = {};
     for (const quote of quotes) {
@@ -169,16 +252,23 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
     setIngestStatus("loading");
     setIngestError("");
     clearThreadDraft();
+    setShortlistedQuoteIds([]);
+    setShortlistStatus("idle");
+    setShortlistError("");
 
     try {
       const parsed = await ingestThreadEditionFromSubstackUrl(trimmedUrl);
       setSource(parsed);
       setSelectedQuoteIds([]);
       setIngestStatus("ready");
+      await buildShortlist(parsed);
     } catch (error: any) {
       setIngestStatus("error");
       setIngestError(String(error?.message || "Unable to load Substack edition."));
       setSource(null);
+      setShortlistedQuoteIds([]);
+      setShortlistStatus("idle");
+      setShortlistError("");
       setSelectedQuoteIds([]);
     }
   };
@@ -190,6 +280,9 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
     setIngestStatus("loading");
     setIngestError("");
     clearThreadDraft();
+    setShortlistedQuoteIds([]);
+    setShortlistStatus("idle");
+    setShortlistError("");
 
     try {
       const extractedText = await parsePdfToText(file);
@@ -197,10 +290,14 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
       setSource(parsed);
       setSelectedQuoteIds([]);
       setIngestStatus("ready");
+      await buildShortlist(parsed);
     } catch (error: any) {
       setIngestStatus("error");
       setIngestError(String(error?.message || "Unable to parse PDF edition."));
       setSource(null);
+      setShortlistedQuoteIds([]);
+      setShortlistStatus("idle");
+      setShortlistError("");
       setSelectedQuoteIds([]);
     } finally {
       if (pdfInputRef.current) {
@@ -220,6 +317,10 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
 
   const selectAllQuotes = () => {
     setSelectedQuoteIds(allQuotes.map((quote) => quote.id));
+  };
+
+  const selectTopShortlist = () => {
+    setSelectedQuoteIds(shortlistedQuotes.map((quote) => quote.id));
   };
 
   const clearSelectedQuotes = () => {
@@ -277,6 +378,24 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
   };
 
   const handleCopyTweet = async (tweet: ThreadTweetCard, position: number) => {
+    if (tweet.kind === "insight" && tweet.quoteId) {
+      const imageData = getImageForQuote(tweet.quoteId);
+      if (imageData) {
+        try {
+          const copyMode = await copyTextAndDataUrlImageToClipboard(tweet.text, imageData);
+          if (copyMode === "combined") {
+            setFeedbackForTweet(tweet.id, `Tweet ${position} + image copied.`);
+          } else {
+            setFeedbackForTweet(tweet.id, `Tweet ${position} copied. Use Download PNG for image.`);
+          }
+          return;
+        } catch (error) {
+          setFeedbackForTweet(tweet.id, normalizeClipboardError(error));
+          return;
+        }
+      }
+    }
+
     try {
       await navigator.clipboard.writeText(tweet.text);
       setFeedbackForTweet(tweet.id, `Tweet ${position} copied.`);
@@ -373,6 +492,48 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
     setFeedbackForTweet(tweet.id, `Image ${position} downloaded.`);
   };
 
+  const renderQuoteCandidateCard = (
+    quote: ThreadQuoteCandidate,
+    options?: { badgeLabel?: string },
+  ) => {
+    const isSelected = selectedQuoteIds.includes(quote.id);
+
+    return (
+      <div
+        key={quote.id}
+        className={`rounded-xl border p-3 ${isSelected ? "border-brand/50 bg-brand-soft/25" : "border-line bg-canvas/25"}`}
+      >
+        <div className="flex items-start justify-between gap-3 mb-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-xs uppercase tracking-[0.12em] text-stone">
+              {options?.badgeLabel || `Insight ${quote.sourceOrder}`}
+            </p>
+            <span className="rounded-full border border-line bg-white px-2 py-0.5 text-[11px] font-semibold text-stone">
+              {quote.companyName}
+            </span>
+          </div>
+          <button
+            onClick={() => toggleQuoteSelection(quote.id)}
+            disabled={disabled}
+            className={`rounded-lg border px-3 py-1 text-xs font-semibold transition ${
+              isSelected
+                ? "border-brand bg-brand text-white"
+                : "border-line bg-white text-stone hover:text-ink"
+            }`}
+          >
+            {isSelected ? "Selected" : "Use in Thread"}
+          </button>
+        </div>
+
+        <p className="text-sm text-ink/90 mb-2">{quote.summary}</p>
+        <blockquote className="border-l-4 border-brand pl-3">
+          <p className="text-sm italic text-ink">"{quote.quote}"</p>
+        </blockquote>
+        <p className="text-xs text-stone mt-2">- {quote.speakerName}, {quote.speakerDesignation}</p>
+      </div>
+    );
+  };
+
   return (
     <section className="rounded-2xl border border-line bg-white shadow-panel p-5 sm:p-6 space-y-5">
       <header className="space-y-2">
@@ -381,12 +542,21 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
             <p className="text-xs uppercase tracking-[0.16em] text-stone font-semibold">Distribution Desk</p>
             <h3 className="font-serif text-2xl text-ink">Thread Composer (X)</h3>
           </div>
-          <span className="rounded-full border border-brand/25 bg-brand-soft/55 px-3 py-1 text-xs font-semibold text-brand">
-            {provider === "gemini" ? "Gemini" : "OpenRouter"} • {model}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="rounded-full border border-brand/25 bg-brand-soft/55 px-3 py-1 text-xs font-semibold text-brand">
+              {provider === "gemini" ? "Gemini" : "OpenRouter"} • {model}
+            </span>
+            <button
+              onClick={resetComposer}
+              disabled={disabled}
+              className="rounded-lg border border-line bg-white px-3 py-1 text-xs font-semibold text-stone hover:text-ink disabled:opacity-50"
+            >
+              Reset
+            </button>
+          </div>
         </div>
         <p className="text-sm text-stone">
-          Paste final Substack URL, select quotes, then generate a post-ready thread with per-tweet copy, regenerate, and quote-card image actions.
+          Paste final Substack URL to auto-build an AI-picked Top 25 quote universe, then add any misses from the full list and generate your post-ready thread.
         </p>
       </header>
 
@@ -433,7 +603,8 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
             {source.editionDate ? ` • ${source.editionDate}` : ""}
           </p>
           <p>
-            {source.companies.length} companies • {totalQuoteCount} quote candidates
+            {source.companies.length} companies • {totalQuoteCount} total quotes
+            {shortlistStatus === "ready" ? ` • ${shortlistedCount} Top candidates` : ""}
           </p>
         </div>
       )}
@@ -442,15 +613,22 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-sm text-stone">
-              Selected: <span className="font-semibold text-ink">{selectedCount}</span> / {totalQuoteCount}
+              Selected: <span className="font-semibold text-ink">{selectedCount}</span> / {totalQuoteCount} (from Top 25 or Full Universe)
             </p>
             <div className="flex gap-2">
+              <button
+                onClick={selectTopShortlist}
+                disabled={disabled || shortlistStatus !== "ready" || shortlistedCount === 0}
+                className="rounded-lg border border-line bg-white px-3 py-1.5 text-xs font-semibold text-stone disabled:opacity-50 hover:text-ink"
+              >
+                Select Top 25
+              </button>
               <button
                 onClick={selectAllQuotes}
                 disabled={disabled || totalQuoteCount === 0}
                 className="rounded-lg border border-line bg-white px-3 py-1.5 text-xs font-semibold text-stone disabled:opacity-50 hover:text-ink"
               >
-                Select All
+                Select Universe
               </button>
               <button
                 onClick={clearSelectedQuotes}
@@ -473,59 +651,75 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
             <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{threadError}</div>
           )}
 
-          <div className="space-y-4 max-h-[520px] overflow-y-auto pr-1">
-            {source.companies.map((company) => (
-              <article key={`${company.companyName}-${company.industry}`} className="rounded-xl border border-line bg-white p-4">
-                <header className="mb-3">
-                  <h4 className="font-serif text-xl text-ink">{company.companyName}</h4>
-                  <p className="text-xs text-stone">
-                    {company.marketCapCategory} | {company.industry}
-                  </p>
-                  <p className="text-sm text-stone mt-1">{company.companyDescription}</p>
-                </header>
+          {shortlistStatus === "loading" && (
+            <div className="rounded-xl border border-brand/30 bg-brand-soft/30 px-4 py-3 text-sm text-brand">
+              Building AI-picked Top 25 candidate universe...
+            </div>
+          )}
 
-                <div className="space-y-3">
-                  {company.quotes.map((quote) => {
-                    const isSelected = selectedQuoteIds.includes(quote.id);
-                    return (
-                      <div
-                        key={quote.id}
-                        className={`rounded-xl border p-3 ${isSelected ? "border-brand/50 bg-brand-soft/25" : "border-line bg-canvas/25"}`}
-                      >
-                        <div className="flex items-start justify-between gap-3 mb-2">
-                          <p className="text-xs uppercase tracking-[0.12em] text-stone">Insight {quote.sourceOrder}</p>
-                          <button
-                            onClick={() => toggleQuoteSelection(quote.id)}
-                            disabled={disabled}
-                            className={`rounded-lg border px-3 py-1 text-xs font-semibold transition ${
-                              isSelected
-                                ? "border-brand bg-brand text-white"
-                                : "border-line bg-white text-stone hover:text-ink"
-                            }`}
-                          >
-                            {isSelected ? "Selected" : "Use in Thread"}
-                          </button>
-                        </div>
+          {shortlistError && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              Top 25 shortlist could not be generated: {shortlistError}
+            </div>
+          )}
 
-                        <p className="text-sm text-ink/90 mb-2">{quote.summary}</p>
-                        <blockquote className="border-l-4 border-brand pl-3">
-                          <p className="text-sm italic text-ink">"{quote.quote}"</p>
-                        </blockquote>
-                        <p className="text-xs text-stone mt-2">- {quote.speakerName}, {quote.speakerDesignation}</p>
-                      </div>
-                    );
-                  })}
-                </div>
-              </article>
-            ))}
-          </div>
+          <article className="rounded-xl border border-line bg-white p-4">
+            <header className="mb-3">
+              <h4 className="font-serif text-xl text-ink">Top 25 Candidates (AI-picked)</h4>
+              <p className="text-sm text-stone">
+                Start from this smaller universe, then add any missed quotes from the full universe below.
+              </p>
+            </header>
+
+            {shortlistStatus === "loading" ? (
+              <div className="rounded-lg border border-dashed border-line bg-canvas/30 px-4 py-6 text-sm text-stone text-center">
+                Building candidate shortlist...
+              </div>
+            ) : shortlistedQuotes.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-line bg-canvas/30 px-4 py-6 text-sm text-stone text-center">
+                No shortlist candidates available yet. You can still choose from the full universe below.
+              </div>
+            ) : (
+              <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+                {shortlistedQuotes.map((quote, index) =>
+                  renderQuoteCandidateCard(quote, { badgeLabel: `Candidate ${index + 1}` }),
+                )}
+              </div>
+            )}
+          </article>
+
+          <article className="rounded-xl border border-line bg-white p-4">
+            <header className="mb-3">
+              <h4 className="font-serif text-xl text-ink">Full Universe (Manual Additions)</h4>
+              <p className="text-sm text-stone">
+                Add any quote you had in mind that did not make the Top 25 shortlist.
+              </p>
+            </header>
+
+            <div className="space-y-4 max-h-[560px] overflow-y-auto pr-1">
+              {source.companies.map((company) => (
+                <article key={`${company.companyName}-${company.industry}`} className="rounded-xl border border-line bg-canvas/20 p-4">
+                  <header className="mb-3">
+                    <h5 className="font-serif text-lg text-ink">{company.companyName}</h5>
+                    <p className="text-xs text-stone">
+                      {company.marketCapCategory} | {company.industry}
+                    </p>
+                  </header>
+
+                  <div className="space-y-3">
+                    {company.quotes.map((quote) => renderQuoteCandidateCard(quote))}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </article>
         </div>
       )}
 
       {tweets.length > 0 && (
         <div className="space-y-4">
           <div className="rounded-xl border border-line bg-canvas/30 px-4 py-3 text-sm text-stone">
-            {tweets.length} tweet blocks ready. Copy each tweet independently and use image actions for insight tweets.
+            {tweets.length} tweet blocks ready. For insight tweets, Copy Tweet attempts text + image together; Download PNG is always available.
           </div>
 
           {imageActionError && (
@@ -555,7 +749,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
                         onClick={() => handleCopyTweet(tweet, tweetNumber)}
                         className="rounded-lg border border-line bg-white px-3 py-1.5 text-xs font-semibold text-stone hover:text-ink"
                       >
-                        Copy Tweet
+                        {tweet.kind === "insight" ? "Copy Tweet + Image" : "Copy Tweet"}
                       </button>
                       <button
                         onClick={() => handleRegenerateTweet(tweet)}

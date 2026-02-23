@@ -85,6 +85,10 @@ export interface ThreadDraftResult {
   outroTweet: string;
 }
 
+export interface ThreadShortlistResult {
+  shortlistedQuoteIds: string[];
+}
+
 export interface ChatterAnalysisState {
   status: 'idle' | 'analyzing' | 'complete' | 'error';
   result?: ChatterAnalysisResult;
