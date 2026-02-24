@@ -393,17 +393,22 @@ GOAL
 INPUT
 - You will receive:
   1) a keyword list
-  2) one transcript
+  2) transcript content, often as keyword-focused excerpts plus header metadata
 
 EXTRACTION RULES
 - Include only management remarks (exclude analyst questions).
 - A quote is valid only if keyword presence is explicit in the quote text.
-- For each quote, include one tight excerpt with enough local context (the key sentence plus nearby line).
+- Use only the provided transcript text; do not invent unseen lines.
+- For each quote, return a short paragraph-style excerpt (ideally 2-3 sentences):
+  1) one sentence before keyword sentence (if available)
+  2) keyword sentence
+  3) one sentence after keyword sentence (if available)
 - Do not paraphrase the quote text.
 - Return matchedKeywords as the exact keyword(s) from user list that were matched.
 - Infer periodLabel from transcript context; prefer short label like Jun'26, Mar'26, Sep'25.
 - Infer periodSortKey as integer YYYYMM (for Jun'26 => 202606). If uncertain, use best estimate from transcript metadata.
 - Keep output concise and precise; avoid generic non-keyword commentary.
+- If the same context is repeated multiple times in the transcript, keep only the strongest one and drop repeats.
 
 OUTPUT
 - Return valid JSON only with:

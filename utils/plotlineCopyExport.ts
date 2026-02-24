@@ -1,4 +1,5 @@
 import type { PlotlineCompanyResult, PlotlineSummaryResult } from "../types";
+import { buildPlotlineNarrativeFallback } from "./plotlineNarrativeFallback";
 
 const FALLBACK_TEXT = "N/A";
 
@@ -23,11 +24,10 @@ const normalizeScrip = (value: string | undefined): string =>
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, "");
 
-const buildCompanyHeader = (company: PlotlineCompanyResult): string => {
-  const name = normalizeValue(company.companyName);
+const buildCompanyMeta = (company: PlotlineCompanyResult): string => {
   const marketCap = normalizeValue(company.marketCapCategory);
   const industry = normalizeValue(company.industry);
-  return `${name} | ${marketCap} | ${industry}`;
+  return `${marketCap} | ${industry}`;
 };
 
 const getZerodhaUrl = (company: PlotlineCompanyResult): string => {
@@ -43,10 +43,15 @@ const buildSpeakerLine = (name: string, designation: string): string => {
   return `— ${normalizedName}, ${normalizedDesignation}`;
 };
 
-const buildCompanyHtml = (company: PlotlineCompanyResult): string => {
-  const headingText = escapeHtml(buildCompanyHeader(company));
-  const companyDescription = escapeHtml(normalizeValue(company.companyDescription, "Company description not available."));
-  const companyNarrative = escapeHtml(normalizeValue(company.companyNarrative, "Narrative not available."));
+const buildCompanyHtml = (company: PlotlineCompanyResult, fallbackKeywords: string[]): string => {
+  const headingText = escapeHtml(normalizeValue(company.companyName));
+  const companyMeta = escapeHtml(buildCompanyMeta(company));
+  const companyNarrative = escapeHtml(
+    normalizeValue(
+      company.companyNarrative,
+      buildPlotlineNarrativeFallback(company.companyName, company.quotes, fallbackKeywords),
+    ),
+  );
   const zerodhaUrl = getZerodhaUrl(company);
   const headingHtml = zerodhaUrl
     ? `<a href="${escapeHtml(zerodhaUrl)}" style="color:#1155cc;text-decoration:underline;">${headingText}</a>`
@@ -56,10 +61,9 @@ const buildCompanyHtml = (company: PlotlineCompanyResult): string => {
     .map((quote) => {
       const quoteText = escapeHtml(normalizeValue(quote.quote));
       const periodLabel = escapeHtml(normalizeValue(quote.periodLabel, "Unknown Period"));
-      const matchedKeywords = quote.matchedKeywords.length > 0 ? quote.matchedKeywords.join(", ") : "N/A";
       const speakerLine = escapeHtml(buildSpeakerLine(quote.speakerName, quote.speakerDesignation));
       return [
-        `<p style="margin:0 0 8px 0;color:#374151;font-size:12px;">${periodLabel} | ${escapeHtml(matchedKeywords)}</p>`,
+        `<p style="margin:0 0 8px 0;color:#374151;font-size:12px;">${periodLabel}</p>`,
         `<p style="margin:0 0 8px 36px;line-height:1.6;font-style:italic;">"${quoteText}"</p>`,
         `<p style="margin:0 0 14px 36px;line-height:1.6;font-style:italic;">${speakerLine}</p>`,
       ].join("");
@@ -69,23 +73,27 @@ const buildCompanyHtml = (company: PlotlineCompanyResult): string => {
   return [
     `<section style="font-family:Arial,sans-serif;color:#111827;">`,
     `<h2 style="font-size:24px;font-weight:400;margin:0 0 12px 0;">${headingHtml}</h2>`,
-    `<p style="margin:0 0 10px 0;line-height:1.6;">${companyDescription}</p>`,
+    `<p style="margin:0 0 10px 0;line-height:1.6;color:#4b5563;font-size:13px;">${companyMeta}</p>`,
     `<p style="margin:0 0 14px 0;line-height:1.6;">${companyNarrative}</p>`,
     quotesHtml,
     `</section>`,
   ].join("");
 };
 
-const buildCompanyText = (company: PlotlineCompanyResult): string => {
+const buildCompanyText = (company: PlotlineCompanyResult, fallbackKeywords: string[]): string => {
   const lines: string[] = [];
-  lines.push(buildCompanyHeader(company));
-  lines.push(normalizeValue(company.companyDescription, "Company description not available."));
-  lines.push(normalizeValue(company.companyNarrative, "Narrative not available."));
+  lines.push(normalizeValue(company.companyName));
+  lines.push(buildCompanyMeta(company));
+  lines.push(
+    normalizeValue(
+      company.companyNarrative,
+      buildPlotlineNarrativeFallback(company.companyName, company.quotes, fallbackKeywords),
+    ),
+  );
   lines.push("");
 
   for (const quote of company.quotes) {
-    const keywordLine = quote.matchedKeywords.length > 0 ? quote.matchedKeywords.join(", ") : "N/A";
-    lines.push(`${normalizeValue(quote.periodLabel, "Unknown Period")} | ${keywordLine}`);
+    lines.push(normalizeValue(quote.periodLabel, "Unknown Period"));
     lines.push(`    "${normalizeValue(quote.quote)}"`);
     lines.push(`    ${buildSpeakerLine(quote.speakerName, quote.speakerDesignation)}`);
     lines.push("");
@@ -131,8 +139,12 @@ export const buildPlotlineClipboardExport = (
   const dividerHtml = `<hr style="border:none;border-top:1px solid #9ca3af;margin:24px 0;" />`;
   const dividerText = "\n------------------------------------------------------------\n";
 
-  const htmlParts = [buildThemeHtml(summary), ...companies.map((company) => buildCompanyHtml(company))].filter(Boolean);
-  const textParts = [buildThemeText(summary), ...companies.map((company) => buildCompanyText(company))].filter(Boolean);
+  const htmlParts = [buildThemeHtml(summary), ...companies.map((company) => buildCompanyHtml(company, summary.keywords))].filter(
+    Boolean,
+  );
+  const textParts = [buildThemeText(summary), ...companies.map((company) => buildCompanyText(company, summary.keywords))].filter(
+    Boolean,
+  );
 
   return {
     html: htmlParts.join(dividerHtml),

@@ -13,6 +13,7 @@ import {
   ModelType,
   type PlotlineBatchFile,
   type PlotlineCompanyResult,
+  type PlotlineFileResult,
   type PlotlineNarrativeRequestCompany,
   type PlotlineSummaryResult,
   type PlotlineQuoteMatch,
@@ -32,6 +33,7 @@ import ThreadComposer from './components/ThreadComposer';
 import { buildChatterClipboardExport } from './utils/chatterCopyExport';
 import { buildPointsClipboardExport } from './utils/pointsCopyExport';
 import { buildPlotlineClipboardExport } from './utils/plotlineCopyExport';
+import { buildPlotlineNarrativeFallback } from './utils/plotlineNarrativeFallback';
 import {
   clearPersistedSession,
   loadPersistedSession,
@@ -111,10 +113,12 @@ const POINTS_CHUNK_SIZE = 12;
 const POINTS_MAX_IMAGE_PAYLOAD_CHARS = 20 * 1024 * 1024;
 const POINTS_CHUNK_MAX_RETRIES = 2;
 const CHATTER_MAX_RETRIES = 2;
+const PLOTLINE_MAX_RETRIES = 2;
 const PLOTLINE_MAX_QUOTES_PER_COMPANY = 12;
 const PLOTLINE_MAX_KEYWORDS = 20;
 const CHATTER_RETRY_BASE_DELAY_MS = 1800;
 const POINTS_RETRY_BASE_DELAY_MS = 1200;
+const PLOTLINE_RETRY_BASE_DELAY_MS = 1800;
 const MAX_RETRY_DELAY_MS = 90 * 1000;
 const POINTS_RETRY_RENDER_PROFILES = [
   { scale: 1.15, jpegQuality: 0.75 },
@@ -390,6 +394,48 @@ const dedupePlotlineQuotes = (quotes: PlotlineQuoteMatch[]): PlotlineQuoteMatch[
     }
   }
   return Array.from(unique.values());
+};
+
+const buildPlotlineCompaniesForNarrative = (
+  resultFiles: PlotlineFileResult[],
+): PlotlineNarrativeRequestCompany[] => {
+  const groupedCompanies = new Map<string, PlotlineNarrativeRequestCompany>();
+
+  for (const fileResult of resultFiles) {
+    if (!Array.isArray(fileResult.quotes) || fileResult.quotes.length === 0) continue;
+
+    const companyKey = normalizeCompanyKey(fileResult);
+    const existing = groupedCompanies.get(companyKey);
+    if (!existing) {
+      groupedCompanies.set(companyKey, {
+        companyKey,
+        companyName: fileResult.companyName,
+        nseScrip: fileResult.nseScrip,
+        marketCapCategory: fileResult.marketCapCategory,
+        industry: fileResult.industry,
+        companyDescription: fileResult.companyDescription,
+        quotes: [...fileResult.quotes],
+      });
+      continue;
+    }
+
+    existing.quotes.push(...fileResult.quotes);
+  }
+
+  return Array.from(groupedCompanies.values())
+    .map((company) => ({
+      ...company,
+      quotes: dedupePlotlineQuotes(company.quotes)
+        .sort((left, right) => {
+          if (left.periodSortKey !== right.periodSortKey) {
+            return left.periodSortKey - right.periodSortKey;
+          }
+          return left.quote.localeCompare(right.quote);
+        })
+        .slice(0, PLOTLINE_MAX_QUOTES_PER_COMPANY),
+    }))
+    .filter((company) => company.quotes.length > 0)
+    .sort((left, right) => left.companyName.localeCompare(right.companyName));
 };
 
 const formatSavedTimestamp = (timestamp: number): string => {
@@ -722,6 +768,41 @@ const App: React.FC = () => {
       }
 
       throw lastError || new Error('Analysis failed.');
+    },
+    [],
+  );
+
+  const runPlotlineWithRetry = useCallback(
+    async (
+      transcript: string,
+      keywords: string[],
+      providerType: ProviderType,
+      modelId: ModelType,
+      onProgress: (progress: ProgressEvent) => void,
+      onRetryNotice: (message: string) => void,
+    ): Promise<PlotlineFileResult> => {
+      let lastError: any = null;
+      for (let attempt = 0; attempt <= PLOTLINE_MAX_RETRIES; attempt++) {
+        try {
+          return await analyzePlotlineTranscript(transcript, keywords, providerType, modelId, onProgress);
+        } catch (error: any) {
+          lastError = error;
+          const errorMessage = String(error?.message || 'Plotline analysis failed.');
+          const isRetriable = isRetriableChunkError(errorMessage);
+          if (attempt < PLOTLINE_MAX_RETRIES && isRetriable) {
+            const retryCount = attempt + 1;
+            const retryDelayMs = getRetryDelayMs(errorMessage, retryCount, PLOTLINE_RETRY_BASE_DELAY_MS);
+            const retrySeconds = Math.max(1, Math.ceil(retryDelayMs / 1000));
+            const retryReason = isRateLimitError(errorMessage) ? 'Rate limit reached' : 'Temporary upstream issue';
+            onRetryNotice(`${retryReason}. Retrying in ${retrySeconds}s (${retryCount}/${PLOTLINE_MAX_RETRIES})...`);
+            await wait(retryDelayMs);
+            continue;
+          }
+          throw error;
+        }
+      }
+
+      throw lastError || new Error('Plotline analysis failed.');
     },
     [],
   );
@@ -1608,7 +1689,7 @@ const App: React.FC = () => {
       setPlotlineBatchFiles([...nextFiles]);
 
       try {
-        const result = await analyzePlotlineTranscript(
+        const result = await runPlotlineWithRetry(
           nextFiles[fileIndex].content,
           plotlineKeywords,
           provider,
@@ -1632,6 +1713,32 @@ const App: React.FC = () => {
               currentLabel: nextFiles[fileIndex].name,
               progress: {
                 ...progress,
+                percent: overallPercent,
+              },
+            });
+          },
+          (message) => {
+            nextFiles[fileIndex] = {
+              ...nextFiles[fileIndex],
+              status: 'analyzing',
+              progress: {
+                stage: 'analyzing',
+                message,
+                percent: 90,
+              },
+            };
+            setPlotlineBatchFiles([...nextFiles]);
+
+            const { completed, failed } = getCounts();
+            const overallPercent = Math.round(((queueIndex + 0.9) / pendingIndexes.length) * 92);
+            setPlotlineBatchProgress({
+              total: pendingIndexes.length,
+              completed,
+              failed,
+              currentLabel: nextFiles[fileIndex].name,
+              progress: {
+                stage: 'analyzing',
+                message,
                 percent: overallPercent,
               },
             });
@@ -1686,56 +1793,36 @@ const App: React.FC = () => {
           percent: Math.round((completedQueueItems / pendingIndexes.length) * 92),
         },
       });
+
+      const incrementalResultFiles = nextFiles
+        .map((queuedFile) => queuedFile.result)
+        .filter((result): result is NonNullable<PlotlineBatchFile['result']> => Boolean(result));
+      const incrementalCompaniesForNarrative = buildPlotlineCompaniesForNarrative(incrementalResultFiles);
+
+      if (incrementalCompaniesForNarrative.length > 0) {
+        setPlotlineSummary((previous) => {
+          const previousNarratives = new Map(
+            (previous?.companies || []).map((company) => [company.companyKey, company.companyNarrative]),
+          );
+          const companies = incrementalCompaniesForNarrative.map((company) => ({
+            ...company,
+            companyNarrative:
+              previousNarratives.get(company.companyKey) ||
+              buildPlotlineNarrativeFallback(company.companyName, company.quotes, plotlineKeywords),
+          }));
+          return {
+            keywords: [...plotlineKeywords],
+            companies,
+            masterThemeBullets: [],
+          };
+        });
+      }
     }
 
     const resultFiles = nextFiles
       .map((file) => file.result)
       .filter((result): result is NonNullable<PlotlineBatchFile['result']> => Boolean(result));
-    const groupedCompanies = new Map<string, PlotlineCompanyResult>();
-
-    for (const fileResult of resultFiles) {
-      if (!Array.isArray(fileResult.quotes) || fileResult.quotes.length === 0) continue;
-      const companyKey = normalizeCompanyKey(fileResult);
-      const existing = groupedCompanies.get(companyKey);
-      if (!existing) {
-        groupedCompanies.set(companyKey, {
-          companyKey,
-          companyName: fileResult.companyName,
-          fiscalPeriod: fileResult.fiscalPeriod,
-          nseScrip: fileResult.nseScrip,
-          marketCapCategory: fileResult.marketCapCategory,
-          industry: fileResult.industry,
-          companyDescription: fileResult.companyDescription,
-          quotes: [...fileResult.quotes],
-          companyNarrative: '',
-        });
-      } else {
-        existing.quotes.push(...fileResult.quotes);
-      }
-    }
-
-    const companiesForNarrative: PlotlineNarrativeRequestCompany[] = Array.from(groupedCompanies.values())
-      .map((company) => {
-        const dedupedQuotes = dedupePlotlineQuotes(company.quotes)
-          .sort((left, right) => {
-            if (left.periodSortKey !== right.periodSortKey) {
-              return left.periodSortKey - right.periodSortKey;
-            }
-            return left.quote.localeCompare(right.quote);
-          })
-          .slice(0, PLOTLINE_MAX_QUOTES_PER_COMPANY);
-
-        return {
-          companyKey: company.companyKey,
-          companyName: company.companyName,
-          nseScrip: company.nseScrip,
-          marketCapCategory: company.marketCapCategory,
-          industry: company.industry,
-          companyDescription: company.companyDescription,
-          quotes: dedupedQuotes,
-        };
-      })
-      .filter((company) => company.quotes.length > 0);
+    const companiesForNarrative = buildPlotlineCompaniesForNarrative(resultFiles);
 
     if (companiesForNarrative.length === 0) {
       setPlotlineSummary({
@@ -1780,9 +1867,11 @@ const App: React.FC = () => {
         narrativeResult.companyNarratives.map((item) => [item.companyKey, item.narrative]),
       );
 
-      const companies = companiesForNarrative.map((company) => ({
+      const companies: PlotlineCompanyResult[] = companiesForNarrative.map((company) => ({
         ...company,
-        companyNarrative: narrativeMap.get(company.companyKey) || '',
+        companyNarrative:
+          narrativeMap.get(company.companyKey) ||
+          buildPlotlineNarrativeFallback(company.companyName, company.quotes, plotlineKeywords),
       }));
 
       setPlotlineSummary({
@@ -1802,9 +1891,9 @@ const App: React.FC = () => {
         },
       }));
     } catch (error: any) {
-      const companies = companiesForNarrative.map((company) => ({
+      const companies: PlotlineCompanyResult[] = companiesForNarrative.map((company) => ({
         ...company,
-        companyNarrative: '',
+        companyNarrative: buildPlotlineNarrativeFallback(company.companyName, company.quotes, plotlineKeywords),
       }));
       setPlotlineSummary({
         keywords: [...plotlineKeywords],
@@ -1825,7 +1914,7 @@ const App: React.FC = () => {
     } finally {
       setIsAnalyzingPlotlineBatch(false);
     }
-  }, [plotlineBatchFiles, plotlineKeywords, provider, selectedPlotlineModel]);
+  }, [plotlineBatchFiles, plotlineKeywords, provider, runPlotlineWithRetry, selectedPlotlineModel]);
 
   const removeBatchFile = (id: string) => {
     setBatchFiles((prev) => prev.filter((file) => file.id !== id));
@@ -2574,38 +2663,42 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {plotlineSummary?.companies.map((company) => (
-        <div key={company.companyKey} className="rounded-2xl border border-line bg-white shadow-panel p-5 sm:p-6 space-y-5">
-          <header>
-            <h2 className="font-serif text-3xl text-ink">{company.companyName}</h2>
-            <p className="text-sm text-stone">
-              {company.marketCapCategory} | {company.industry}
-            </p>
-          </header>
+      {plotlineSummary?.companies.map((company) => {
+        const narrativeText =
+          company.companyNarrative ||
+          buildPlotlineNarrativeFallback(company.companyName, company.quotes, plotlineSummary.keywords);
 
-          {company.companyNarrative && (
+        return (
+          <div key={company.companyKey} className="rounded-2xl border border-line bg-white shadow-panel p-5 sm:p-6 space-y-5">
+            <header>
+              <h2 className="font-serif text-3xl text-ink">{company.companyName}</h2>
+              <p className="text-sm text-stone">
+                {company.marketCapCategory} | {company.industry}
+              </p>
+            </header>
+
             <p className="rounded-xl border border-brand/20 bg-brand-soft/60 px-4 py-3 text-sm leading-relaxed text-ink">
-              {company.companyNarrative}
+              {narrativeText}
             </p>
-          )}
 
-          <div className="space-y-4">
-            {company.quotes.map((quote, index) => (
-              <article key={`${company.companyKey}-${index}`} className="rounded-xl border border-line bg-canvas/45 px-4 py-4">
-                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-stone">
-                  {quote.periodLabel} • {quote.matchedKeywords.join(', ')}
-                </p>
-                <blockquote className="mt-2 text-[15px] leading-relaxed italic text-ink">
-                  "{quote.quote}"
-                </blockquote>
-                <p className="mt-2 text-xs text-stone italic">
-                  — {quote.speakerName}, {quote.speakerDesignation}
-                </p>
-              </article>
-            ))}
+            <div className="space-y-4">
+              {company.quotes.map((quote, index) => (
+                <article key={`${company.companyKey}-${index}`} className="rounded-xl border border-line bg-canvas/45 px-4 py-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.08em] text-stone">
+                    {quote.periodLabel}
+                  </p>
+                  <blockquote className="mt-2 text-[15px] leading-relaxed italic text-ink">
+                    "{quote.quote}"
+                  </blockquote>
+                  <p className="mt-2 text-xs text-stone italic">
+                    — {quote.speakerName}, {quote.speakerDesignation}
+                  </p>
+                </article>
+              ))}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </section>
   );
 
