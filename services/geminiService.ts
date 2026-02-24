@@ -1,6 +1,9 @@
 import {
   ChatterAnalysisResult,
   ModelType,
+  PlotlineFileResult,
+  PlotlineNarrativeRequestCompany,
+  PlotlineNarrativeResult,
   PointsAndFiguresResult,
   ProgressEvent,
   ProviderType,
@@ -13,6 +16,8 @@ import {
 
 const CHATTER_ANALYZE_ENDPOINT = "/api/chatter/analyze";
 const POINTS_ANALYZE_ENDPOINT = "/api/points/analyze";
+const PLOTLINE_ANALYZE_ENDPOINT = "/api/plotline/analyze";
+const PLOTLINE_SUMMARIZE_ENDPOINT = "/api/plotline/summarize";
 const CHATTER_THREAD_INGEST_ENDPOINT = "/api/chatter/thread/ingest";
 const CHATTER_THREAD_GENERATE_ENDPOINT = "/api/chatter/thread/generate";
 const CHATTER_THREAD_REGENERATE_ENDPOINT = "/api/chatter/thread/regenerate";
@@ -53,6 +58,23 @@ interface ThreadGenerateApiResult {
   introTweet: string;
   insightTweets: ThreadGenerateInsightApiItem[];
   outroTweet: string;
+}
+
+interface PlotlineAnalyzeApiResult {
+  companyName: string;
+  fiscalPeriod: string;
+  nseScrip: string;
+  marketCapCategory: string;
+  industry: string;
+  companyDescription: string;
+  quotes: Array<{
+    quote: string;
+    speakerName: string;
+    speakerDesignation: string;
+    matchedKeywords: string[];
+    periodLabel: string;
+    periodSortKey: number;
+  }>;
 }
 
 interface PdfImageConversionOptions {
@@ -417,6 +439,90 @@ export const analyzeTranscript = async (
       clearInterval(progressInterval);
     }
   }
+};
+
+export const analyzePlotlineTranscript = async (
+  transcript: string,
+  keywords: string[],
+  provider: ProviderType = ProviderType.GEMINI,
+  modelId: ModelType = ModelType.FLASH_3,
+  onProgress?: (event: ProgressEvent) => void,
+): Promise<PlotlineFileResult> => {
+  if (!transcript.trim()) {
+    throw new Error("Transcript is empty.");
+  }
+  if (!Array.isArray(keywords) || keywords.length === 0) {
+    throw new Error("At least one keyword is required.");
+  }
+
+  let progressInterval: ReturnType<typeof setInterval> | undefined;
+  let index = 0;
+
+  if (onProgress) {
+    onProgress(transcriptProgressDefaults[0]);
+    progressInterval = setInterval(() => {
+      index = Math.min(index + 1, transcriptProgressDefaults.length - 1);
+      onProgress(transcriptProgressDefaults[index]);
+    }, 1500);
+  }
+
+  try {
+    const result = await postJson<PlotlineAnalyzeApiResult>(PLOTLINE_ANALYZE_ENDPOINT, {
+      provider,
+      model: modelId,
+      transcript,
+      keywords,
+    });
+
+    if (!Array.isArray(result?.quotes)) {
+      throw new Error("Plotline analysis returned an invalid payload.");
+    }
+
+    onProgress?.({ stage: "complete", message: "Plotline matches ready.", percent: 100 });
+    return {
+      companyName: result.companyName,
+      fiscalPeriod: result.fiscalPeriod,
+      nseScrip: result.nseScrip,
+      marketCapCategory: result.marketCapCategory,
+      industry: result.industry,
+      companyDescription: result.companyDescription,
+      quotes: result.quotes,
+    };
+  } catch (error) {
+    onProgress?.({ stage: "error", message: "Plotline analysis failed. Please retry.", percent: 100 });
+    throw error;
+  } finally {
+    if (progressInterval) {
+      clearInterval(progressInterval);
+    }
+  }
+};
+
+export const summarizePlotlineTheme = async (
+  keywords: string[],
+  companies: PlotlineNarrativeRequestCompany[],
+  provider: ProviderType = ProviderType.GEMINI,
+  modelId: ModelType = ModelType.FLASH_3,
+): Promise<PlotlineNarrativeResult> => {
+  if (!Array.isArray(keywords) || keywords.length === 0) {
+    throw new Error("At least one keyword is required.");
+  }
+  if (!Array.isArray(companies) || companies.length === 0) {
+    throw new Error("At least one company is required for Plotline summary.");
+  }
+
+  const result = await postJson<PlotlineNarrativeResult>(PLOTLINE_SUMMARIZE_ENDPOINT, {
+    provider,
+    model: modelId,
+    keywords,
+    companies,
+  });
+
+  if (!Array.isArray(result?.companyNarratives) || !Array.isArray(result?.masterThemeBullets)) {
+    throw new Error("Plotline summary returned an invalid payload.");
+  }
+
+  return result;
 };
 
 // --- "Points & Figures" Analysis ---

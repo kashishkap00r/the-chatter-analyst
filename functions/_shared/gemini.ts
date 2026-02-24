@@ -126,6 +126,74 @@ export const THREAD_SHORTLIST_RESPONSE_SCHEMA = {
   required: ["shortlistedQuoteIds"],
 };
 
+export const PLOTLINE_EXTRACT_RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    companyName: { type: "STRING" },
+    fiscalPeriod: { type: "STRING" },
+    nseScrip: { type: "STRING" },
+    marketCapCategory: { type: "STRING" },
+    industry: { type: "STRING" },
+    companyDescription: { type: "STRING" },
+    quotes: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          quote: { type: "STRING" },
+          speakerName: { type: "STRING" },
+          speakerDesignation: { type: "STRING" },
+          matchedKeywords: {
+            type: "ARRAY",
+            items: { type: "STRING" },
+          },
+          periodLabel: { type: "STRING" },
+          periodSortKey: { type: "INTEGER" },
+        },
+        required: [
+          "quote",
+          "speakerName",
+          "speakerDesignation",
+          "matchedKeywords",
+          "periodLabel",
+          "periodSortKey",
+        ],
+      },
+    },
+  },
+  required: [
+    "companyName",
+    "fiscalPeriod",
+    "nseScrip",
+    "marketCapCategory",
+    "industry",
+    "companyDescription",
+    "quotes",
+  ],
+};
+
+export const PLOTLINE_SUMMARIZE_RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    companyNarratives: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          companyKey: { type: "STRING" },
+          narrative: { type: "STRING" },
+        },
+        required: ["companyKey", "narrative"],
+      },
+    },
+    masterThemeBullets: {
+      type: "ARRAY",
+      items: { type: "STRING" },
+    },
+  },
+  required: ["companyNarratives", "masterThemeBullets"],
+};
+
 export const CHATTER_PROMPT = `
 ROLE & AUDIENCE
 You are a research analyst for "The Chatter | India Edition," a bi-weekly newsletter read by portfolio managers.
@@ -312,6 +380,57 @@ OUTPUT RULES
 - Include only quote IDs that are present in input.
 - Do not include duplicates.
 - Return up to maxCandidates IDs.
+`.trim();
+
+export const PLOTLINE_EXTRACT_PROMPT = `
+ROLE
+You are extracting Plotline evidence from an earnings call transcript.
+
+GOAL
+- Find only management quotes that explicitly mention any user-provided keyword (or close textual variant).
+- Keep focus on long-term structural signals, not routine quarter noise.
+
+INPUT
+- You will receive:
+  1) a keyword list
+  2) one transcript
+
+EXTRACTION RULES
+- Include only management remarks (exclude analyst questions).
+- A quote is valid only if keyword presence is explicit in the quote text.
+- For each quote, include one tight excerpt with enough local context (the key sentence plus nearby line).
+- Do not paraphrase the quote text.
+- Return matchedKeywords as the exact keyword(s) from user list that were matched.
+- Infer periodLabel from transcript context; prefer short label like Jun'26, Mar'26, Sep'25.
+- Infer periodSortKey as integer YYYYMM (for Jun'26 => 202606). If uncertain, use best estimate from transcript metadata.
+- Keep output concise and precise; avoid generic non-keyword commentary.
+
+OUTPUT
+- Return valid JSON only with:
+  companyName, fiscalPeriod, nseScrip, marketCapCategory, industry, companyDescription, quotes.
+- nseScrip must be uppercase A-Z0-9.
+- quotes should include only keyword-matching management remarks.
+`.trim();
+
+export const PLOTLINE_SUMMARIZE_PROMPT = `
+ROLE
+You are writing Plotline synthesis from extracted management quotes.
+
+GOAL
+- For each company, write one simple narrative paragraph (4-6 sentences) that explains what the chronological quotes mean collectively.
+- Then write master theme bullets across all companies for the keyword edition.
+
+STYLE
+- Simple English. No dense jargon.
+- Narrative should explain strategic direction, not repeat each quote verbatim.
+- Keep company narratives practical and easy to understand.
+- Master bullets should be executive-style and cross-company.
+
+OUTPUT RULES
+- Return strict JSON only with:
+  1) companyNarratives: [{ companyKey, narrative }]
+  2) masterThemeBullets: string[]
+- masterThemeBullets target: 5 to 8 bullets.
 `.trim();
 
 const parseGeminiText = (payload: any): string => {

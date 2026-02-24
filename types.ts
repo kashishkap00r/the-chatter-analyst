@@ -1,4 +1,4 @@
-export type AppMode = 'chatter' | 'points';
+export type AppMode = 'chatter' | 'points' | 'plotline';
 export type AnalysisStage = 'idle' | 'preparing' | 'uploading' | 'analyzing' | 'finalizing' | 'complete' | 'error';
 
 export interface ProgressEvent {
@@ -142,6 +142,73 @@ export interface PointsAnalysisState {
     errorMessage?: string;
     progressMessage?: string;
     progress?: ProgressEvent;
+}
+
+// --- "Plotline" Types ---
+
+export interface PlotlineQuoteMatch {
+  quote: string;
+  speakerName: string;
+  speakerDesignation: string;
+  matchedKeywords: string[];
+  periodLabel: string;
+  periodSortKey: number;
+}
+
+export interface PlotlineFileResult {
+  companyName: string;
+  fiscalPeriod: string;
+  nseScrip: string;
+  marketCapCategory: string;
+  industry: string;
+  companyDescription: string;
+  quotes: PlotlineQuoteMatch[];
+}
+
+export interface PlotlineBatchFile {
+  id: string;
+  name: string;
+  content: string;
+  status: 'pending' | 'parsing' | 'ready' | 'analyzing' | 'complete' | 'error';
+  result?: PlotlineFileResult;
+  error?: string;
+  progress?: ProgressEvent;
+}
+
+export interface PlotlineCompanyResult {
+  companyKey: string;
+  companyName: string;
+  fiscalPeriod?: string;
+  nseScrip: string;
+  marketCapCategory: string;
+  industry: string;
+  companyDescription: string;
+  quotes: PlotlineQuoteMatch[];
+  companyNarrative: string;
+}
+
+export interface PlotlineSummaryResult {
+  keywords: string[];
+  companies: PlotlineCompanyResult[];
+  masterThemeBullets: string[];
+}
+
+export interface PlotlineNarrativeRequestCompany {
+  companyKey: string;
+  companyName: string;
+  nseScrip: string;
+  marketCapCategory: string;
+  industry: string;
+  companyDescription: string;
+  quotes: PlotlineQuoteMatch[];
+}
+
+export interface PlotlineNarrativeResult {
+  companyNarratives: Array<{
+    companyKey: string;
+    narrative: string;
+  }>;
+  masterThemeBullets: string[];
 }
 
 

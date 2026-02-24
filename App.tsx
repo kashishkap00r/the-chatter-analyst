@@ -1,14 +1,21 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   analyzePresentation,
+  analyzePlotlineTranscript,
   analyzeTranscript,
   convertPdfToImages,
   getPdfPageCount,
   parsePdfToText,
   renderPdfPagesHighQuality,
+  summarizePlotlineTheme,
 } from './services/geminiService';
 import {
   ModelType,
+  type PlotlineBatchFile,
+  type PlotlineCompanyResult,
+  type PlotlineNarrativeRequestCompany,
+  type PlotlineSummaryResult,
+  type PlotlineQuoteMatch,
   ProviderType,
   type AppMode,
   type BatchFile,
@@ -24,6 +31,7 @@ import AnalysisProgressPanel from './components/AnalysisProgressPanel';
 import ThreadComposer from './components/ThreadComposer';
 import { buildChatterClipboardExport } from './utils/chatterCopyExport';
 import { buildPointsClipboardExport } from './utils/pointsCopyExport';
+import { buildPlotlineClipboardExport } from './utils/plotlineCopyExport';
 import {
   clearPersistedSession,
   loadPersistedSession,
@@ -49,11 +57,17 @@ interface PersistedAppSessionV1 {
   openRouterModel: ModelType;
   geminiPointsModel: ModelType;
   openRouterPointsModel: ModelType;
+  geminiPlotlineModel?: ModelType;
+  openRouterPlotlineModel?: ModelType;
   batchFiles: BatchFile[];
   chatterSingleState: ChatterAnalysisState;
   batchProgress: BatchProgressState | null;
   pointsBatchFiles: PointsBatchFile[];
   pointsBatchProgress: BatchProgressState | null;
+  plotlineBatchFiles?: PlotlineBatchFile[];
+  plotlineBatchProgress?: BatchProgressState | null;
+  plotlineKeywords?: string[];
+  plotlineSummary?: PlotlineSummaryResult | null;
 }
 
 const statusStyles: Record<BatchFile['status'], string> = {
@@ -97,6 +111,8 @@ const POINTS_CHUNK_SIZE = 12;
 const POINTS_MAX_IMAGE_PAYLOAD_CHARS = 20 * 1024 * 1024;
 const POINTS_CHUNK_MAX_RETRIES = 2;
 const CHATTER_MAX_RETRIES = 2;
+const PLOTLINE_MAX_QUOTES_PER_COMPANY = 12;
+const PLOTLINE_MAX_KEYWORDS = 20;
 const CHATTER_RETRY_BASE_DELAY_MS = 1800;
 const POINTS_RETRY_BASE_DELAY_MS = 1200;
 const MAX_RETRY_DELAY_MS = 90 * 1000;
@@ -271,7 +287,7 @@ const getDynamicChunkSize = (fileSizeBytes: number, pageCount: number): number =
 
 const MODEL_TYPE_VALUES = new Set<string>(Object.values(ModelType) as string[]);
 const PROVIDER_TYPE_VALUES = new Set<string>(Object.values(ProviderType) as string[]);
-const APP_MODE_VALUES = new Set<string>(['chatter', 'points']);
+const APP_MODE_VALUES = new Set<string>(['chatter', 'points', 'plotline']);
 
 const normalizeRecoveredChatterFile = (file: BatchFile): BatchFile => {
   if (file.status === 'parsing' || file.status === 'analyzing') {
@@ -315,6 +331,67 @@ const normalizeRecoveredPointsFile = (file: PointsBatchFile): PointsBatchFile =>
   };
 };
 
+const normalizeRecoveredPlotlineFile = (file: PlotlineBatchFile): PlotlineBatchFile => {
+  if (file.status === 'parsing' || file.status === 'analyzing') {
+    if (file.content.trim()) {
+      return {
+        ...file,
+        status: 'ready',
+        progress: undefined,
+        error: 'Interrupted in previous session. Ready to resume.',
+        result: undefined,
+      };
+    }
+    return {
+      ...file,
+      status: 'error',
+      progress: undefined,
+      error: file.error || 'Interrupted in previous session before parsing completed.',
+      result: undefined,
+    };
+  }
+
+  return {
+    ...file,
+    progress: undefined,
+  };
+};
+
+const normalizeKeyword = (value: string): string =>
+  value
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/[^\w\s\-./+%]/g, '');
+
+const normalizeCompanyKey = (result: {
+  companyName: string;
+  nseScrip?: string;
+  marketCapCategory?: string;
+  industry?: string;
+}): string => {
+  const normalizedScrip = (result.nseScrip || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .trim();
+  if (normalizedScrip) return normalizedScrip;
+  const normalizedName = (result.companyName || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return normalizedName || 'unknown-company';
+};
+
+const dedupePlotlineQuotes = (quotes: PlotlineQuoteMatch[]): PlotlineQuoteMatch[] => {
+  const unique = new Map<string, PlotlineQuoteMatch>();
+  for (const quote of quotes) {
+    const key = `${quote.quote.toLowerCase()}|${quote.speakerName.toLowerCase()}|${quote.periodSortKey}`;
+    if (!unique.has(key)) {
+      unique.set(key, quote);
+    }
+  }
+  return Array.from(unique.values());
+};
+
 const formatSavedTimestamp = (timestamp: number): string => {
   if (!Number.isFinite(timestamp)) return 'a previous session';
   try {
@@ -334,6 +411,8 @@ const App: React.FC = () => {
   const [openRouterModel, setOpenRouterModel] = useState<ModelType>(ModelType.OPENROUTER_MINIMAX);
   const [geminiPointsModel, setGeminiPointsModel] = useState<ModelType>(ModelType.FLASH_3);
   const [openRouterPointsModel, setOpenRouterPointsModel] = useState<ModelType>(ModelType.OPENROUTER_MINIMAX);
+  const [geminiPlotlineModel, setGeminiPlotlineModel] = useState<ModelType>(ModelType.FLASH_3);
+  const [openRouterPlotlineModel, setOpenRouterPlotlineModel] = useState<ModelType>(ModelType.OPENROUTER_MINIMAX);
 
   const [batchFiles, setBatchFiles] = useState<BatchFile[]>([]);
   const [isAnalyzingBatch, setIsAnalyzingBatch] = useState(false);
@@ -347,6 +426,16 @@ const App: React.FC = () => {
   const [pointsBatchProgress, setPointsBatchProgress] = useState<BatchProgressState | null>(null);
   const [pointsCopyAllStatus, setPointsCopyAllStatus] = useState<'idle' | 'copied' | 'error'>('idle');
   const [pointsCopyAllErrorMessage, setPointsCopyAllErrorMessage] = useState('');
+
+  const [plotlineBatchFiles, setPlotlineBatchFiles] = useState<PlotlineBatchFile[]>([]);
+  const [isAnalyzingPlotlineBatch, setIsAnalyzingPlotlineBatch] = useState(false);
+  const [plotlineBatchProgress, setPlotlineBatchProgress] = useState<BatchProgressState | null>(null);
+  const [plotlineKeywords, setPlotlineKeywords] = useState<string[]>([]);
+  const [plotlineKeywordInput, setPlotlineKeywordInput] = useState('');
+  const [plotlineSummary, setPlotlineSummary] = useState<PlotlineSummaryResult | null>(null);
+  const [plotlineCopyAllStatus, setPlotlineCopyAllStatus] = useState<'idle' | 'copied' | 'error'>('idle');
+  const [plotlineCopyAllErrorMessage, setPlotlineCopyAllErrorMessage] = useState('');
+
   const [pendingResumeSession, setPendingResumeSession] = useState<PersistedAppSessionV1 | null>(null);
   const [isPersistenceReady, setIsPersistenceReady] = useState(false);
   const [isPersistenceBlocked, setIsPersistenceBlocked] = useState(false);
@@ -355,9 +444,11 @@ const App: React.FC = () => {
 
   const chatterFileInputRef = useRef<HTMLInputElement>(null);
   const pointsFileInputRef = useRef<HTMLInputElement>(null);
+  const plotlineFileInputRef = useRef<HTMLInputElement>(null);
 
   const selectedChatterModel = provider === ProviderType.GEMINI ? geminiModel : openRouterModel;
   const selectedPointsModel = provider === ProviderType.GEMINI ? geminiPointsModel : openRouterPointsModel;
+  const selectedPlotlineModel = provider === ProviderType.GEMINI ? geminiPlotlineModel : openRouterPlotlineModel;
   const currentModelOptions = provider === ProviderType.GEMINI ? GEMINI_MODEL_OPTIONS : OPENROUTER_MODEL_OPTIONS;
 
   const getCompletedChatterResults = useCallback((): ChatterAnalysisResult[] => {
@@ -407,6 +498,12 @@ const App: React.FC = () => {
     if (MODEL_TYPE_VALUES.has(snapshot.openRouterPointsModel)) {
       setOpenRouterPointsModel(snapshot.openRouterPointsModel);
     }
+    if (snapshot.geminiPlotlineModel && MODEL_TYPE_VALUES.has(snapshot.geminiPlotlineModel)) {
+      setGeminiPlotlineModel(snapshot.geminiPlotlineModel);
+    }
+    if (snapshot.openRouterPlotlineModel && MODEL_TYPE_VALUES.has(snapshot.openRouterPlotlineModel)) {
+      setOpenRouterPlotlineModel(snapshot.openRouterPlotlineModel);
+    }
 
     const restoredBatchFiles = Array.isArray(snapshot.batchFiles)
       ? snapshot.batchFiles.map(normalizeRecoveredChatterFile)
@@ -414,9 +511,13 @@ const App: React.FC = () => {
     const restoredPointsFiles = Array.isArray(snapshot.pointsBatchFiles)
       ? snapshot.pointsBatchFiles.map(normalizeRecoveredPointsFile)
       : [];
+    const restoredPlotlineFiles = Array.isArray(snapshot.plotlineBatchFiles)
+      ? snapshot.plotlineBatchFiles.map(normalizeRecoveredPlotlineFile)
+      : [];
 
     setBatchFiles(restoredBatchFiles);
     setPointsBatchFiles(restoredPointsFiles);
+    setPlotlineBatchFiles(restoredPlotlineFiles);
 
     if (snapshot.chatterSingleState?.status === 'complete' && snapshot.chatterSingleState.result) {
       setChatterSingleState(snapshot.chatterSingleState);
@@ -432,12 +533,33 @@ const App: React.FC = () => {
 
     setBatchProgress(null);
     setPointsBatchProgress(null);
+    setPlotlineBatchProgress(null);
     setIsAnalyzingBatch(false);
     setIsAnalyzingPointsBatch(false);
+    setIsAnalyzingPlotlineBatch(false);
     setCopyAllStatus('idle');
     setCopyAllErrorMessage('');
     setPointsCopyAllStatus('idle');
     setPointsCopyAllErrorMessage('');
+    setPlotlineCopyAllStatus('idle');
+    setPlotlineCopyAllErrorMessage('');
+    setPlotlineKeywordInput('');
+
+    const restoredKeywords = Array.isArray(snapshot.plotlineKeywords)
+      ? snapshot.plotlineKeywords
+          .filter((item): item is string => typeof item === 'string')
+          .map((item) => normalizeKeyword(item))
+          .filter((item) => item.length > 0)
+          .slice(0, PLOTLINE_MAX_KEYWORDS)
+      : [];
+    setPlotlineKeywords(Array.from(new Set(restoredKeywords)));
+
+    const restoredSummary = snapshot.plotlineSummary;
+    if (restoredSummary && Array.isArray(restoredSummary.companies) && Array.isArray(restoredSummary.keywords)) {
+      setPlotlineSummary(restoredSummary);
+    } else {
+      setPlotlineSummary(null);
+    }
   }, []);
 
   const handleResumeSavedSession = useCallback(() => {
@@ -509,11 +631,17 @@ const App: React.FC = () => {
       openRouterModel,
       geminiPointsModel,
       openRouterPointsModel,
+      geminiPlotlineModel,
+      openRouterPlotlineModel,
       batchFiles,
       chatterSingleState,
       batchProgress,
       pointsBatchFiles,
       pointsBatchProgress,
+      plotlineBatchFiles,
+      plotlineBatchProgress,
+      plotlineKeywords,
+      plotlineSummary,
     };
 
     const timer = window.setTimeout(async () => {
@@ -549,11 +677,17 @@ const App: React.FC = () => {
     openRouterModel,
     geminiPointsModel,
     openRouterPointsModel,
+    geminiPlotlineModel,
+    openRouterPlotlineModel,
     batchFiles,
     chatterSingleState,
     batchProgress,
     pointsBatchFiles,
     pointsBatchProgress,
+    plotlineBatchFiles,
+    plotlineBatchProgress,
+    plotlineKeywords,
+    plotlineSummary,
     isPersistenceReady,
     isPersistenceBlocked,
   ]);
@@ -1290,12 +1424,419 @@ const App: React.FC = () => {
     }
   }, [getCompletedPointsResults]);
 
+  const handleCopyAllPlotline = useCallback(async () => {
+    if (!plotlineSummary || plotlineSummary.companies.length === 0) return;
+
+    const { html, text } = buildPlotlineClipboardExport(plotlineSummary);
+    const clipboard = navigator?.clipboard;
+
+    if (!clipboard) {
+      setPlotlineCopyAllStatus('error');
+      setPlotlineCopyAllErrorMessage('Clipboard API is not available in this browser.');
+      setTimeout(() => setPlotlineCopyAllStatus('idle'), 3500);
+      return;
+    }
+
+    try {
+      const ClipboardItemCtor = (window as any).ClipboardItem;
+      if (ClipboardItemCtor && window.isSecureContext) {
+        const clipboardItem = new ClipboardItemCtor({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([text], { type: 'text/plain' }),
+        });
+        await clipboard.write([clipboardItem]);
+      } else {
+        await clipboard.writeText(text);
+      }
+
+      setPlotlineCopyAllStatus('copied');
+      setPlotlineCopyAllErrorMessage('');
+      setTimeout(() => setPlotlineCopyAllStatus('idle'), 1800);
+    } catch {
+      try {
+        await clipboard.writeText(text);
+        setPlotlineCopyAllStatus('copied');
+        setPlotlineCopyAllErrorMessage('');
+        setTimeout(() => setPlotlineCopyAllStatus('idle'), 1800);
+      } catch (fallbackError: any) {
+        setPlotlineCopyAllStatus('error');
+        setPlotlineCopyAllErrorMessage(fallbackError?.message || 'Copy failed. Please allow clipboard access.');
+        setTimeout(() => setPlotlineCopyAllStatus('idle'), 3500);
+      }
+    }
+  }, [plotlineSummary]);
+
+  const upsertPlotlineKeywords = useCallback((rawValue: string) => {
+    const parsedKeywords = rawValue
+      .split(/[\n,]+/g)
+      .map((item) => normalizeKeyword(item))
+      .filter((item) => item.length > 0);
+
+    if (parsedKeywords.length === 0) return;
+
+    setPlotlineKeywords((prev) => {
+      const next = [...prev];
+      const seen = new Set(prev.map((keyword) => keyword.toLowerCase()));
+      for (const keyword of parsedKeywords) {
+        const normalized = keyword.toLowerCase();
+        if (seen.has(normalized)) continue;
+        if (next.length >= PLOTLINE_MAX_KEYWORDS) break;
+        seen.add(normalized);
+        next.push(keyword);
+      }
+      return next;
+    });
+  }, []);
+
+  const removePlotlineKeyword = useCallback((keyword: string) => {
+    setPlotlineKeywords((prev) => prev.filter((item) => item !== keyword));
+  }, []);
+
+  const handlePlotlineKeywordInputKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLInputElement>) => {
+      if (event.key === 'Enter' || event.key === ',') {
+        event.preventDefault();
+        const raw = plotlineKeywordInput.trim();
+        if (!raw) return;
+        upsertPlotlineKeywords(raw);
+        setPlotlineKeywordInput('');
+      }
+    },
+    [plotlineKeywordInput, upsertPlotlineKeywords],
+  );
+
+  const handlePlotlineKeywordInputBlur = useCallback(() => {
+    const raw = plotlineKeywordInput.trim();
+    if (!raw) return;
+    upsertPlotlineKeywords(raw);
+    setPlotlineKeywordInput('');
+  }, [plotlineKeywordInput, upsertPlotlineKeywords]);
+
+  const handlePlotlineFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files) return;
+
+    const timestamp = Date.now();
+    const sourceFiles = Array.from(files) as File[];
+
+    const parsedFiles = await Promise.all(
+      sourceFiles.map(async (file, index): Promise<PlotlineBatchFile> => {
+        const item: PlotlineBatchFile = {
+          id: `${file.name}-${timestamp}-${index}`,
+          name: file.name,
+          content: '',
+          status: 'parsing',
+        };
+
+        try {
+          if (file.name.toLowerCase().endsWith('.pdf')) {
+            item.content = await parsePdfToText(file);
+          } else if (file.name.toLowerCase().endsWith('.txt')) {
+            item.content = await file.text();
+          } else {
+            item.status = 'error';
+            item.error = 'Only PDF and TXT files are supported for Plotline.';
+            return item;
+          }
+
+          if (!item.content.trim()) {
+            item.status = 'error';
+            item.error = 'Parsed file is empty.';
+            return item;
+          }
+
+          item.status = 'ready';
+        } catch (error: any) {
+          item.status = 'error';
+          item.error = error?.message || 'Unable to parse file.';
+        }
+
+        return item;
+      }),
+    );
+
+    setPlotlineBatchFiles((prev) => [...prev, ...parsedFiles]);
+    setPlotlineSummary(null);
+    if (plotlineFileInputRef.current) {
+      plotlineFileInputRef.current.value = '';
+    }
+  };
+
+  const handleAnalyzePlotlineBatch = useCallback(async () => {
+    const pendingIndexes = plotlineBatchFiles
+      .map((file, index) => (file.status === 'ready' ? index : -1))
+      .filter((index) => index !== -1);
+
+    if (pendingIndexes.length === 0 || plotlineKeywords.length === 0) return;
+
+    setPlotlineCopyAllStatus('idle');
+    setPlotlineCopyAllErrorMessage('');
+    setPlotlineSummary(null);
+    setIsAnalyzingPlotlineBatch(true);
+
+    const nextFiles = [...plotlineBatchFiles];
+    const getCounts = () => ({
+      completed: pendingIndexes.filter((index) => nextFiles[index].status === 'complete').length,
+      failed: pendingIndexes.filter((index) => nextFiles[index].status === 'error').length,
+    });
+
+    setPlotlineBatchProgress({
+      total: pendingIndexes.length,
+      completed: 0,
+      failed: 0,
+      progress: {
+        stage: 'preparing',
+        message: 'Starting Plotline analysis...',
+        percent: 0,
+      },
+    });
+
+    for (let queueIndex = 0; queueIndex < pendingIndexes.length; queueIndex++) {
+      const fileIndex = pendingIndexes[queueIndex];
+      const file = nextFiles[fileIndex];
+
+      nextFiles[fileIndex] = {
+        ...file,
+        status: 'analyzing',
+        error: undefined,
+        progress: {
+          stage: 'preparing',
+          message: 'Preparing transcript for keyword extraction...',
+          percent: 8,
+        },
+      };
+      setPlotlineBatchFiles([...nextFiles]);
+
+      try {
+        const result = await analyzePlotlineTranscript(
+          nextFiles[fileIndex].content,
+          plotlineKeywords,
+          provider,
+          selectedPlotlineModel,
+          (progress) => {
+            nextFiles[fileIndex] = {
+              ...nextFiles[fileIndex],
+              status: 'analyzing',
+              progress,
+            };
+            setPlotlineBatchFiles([...nextFiles]);
+
+            const { completed, failed } = getCounts();
+            const inFileRatio = (progress.percent ?? 0) / 100;
+            const overallPercent = Math.round(((queueIndex + inFileRatio) / pendingIndexes.length) * 92);
+
+            setPlotlineBatchProgress({
+              total: pendingIndexes.length,
+              completed,
+              failed,
+              currentLabel: nextFiles[fileIndex].name,
+              progress: {
+                ...progress,
+                percent: overallPercent,
+              },
+            });
+          },
+        );
+
+        nextFiles[fileIndex] = {
+          ...nextFiles[fileIndex],
+          status: 'complete',
+          result,
+          error: result.quotes.length === 0 ? 'No keyword matches found in this transcript.' : undefined,
+          progress: {
+            stage: 'complete',
+            message:
+              result.quotes.length === 0
+                ? 'Completed with no keyword matches in this file.'
+                : 'Keyword matches extracted.',
+            percent: 100,
+          },
+        };
+      } catch (error: any) {
+        nextFiles[fileIndex] = {
+          ...nextFiles[fileIndex],
+          status: 'error',
+          error: error?.message || 'Failed to analyze transcript.',
+          progress: {
+            stage: 'error',
+            message: 'Plotline analysis failed.',
+            percent: 100,
+          },
+        };
+      }
+
+      setPlotlineBatchFiles([...nextFiles]);
+      const { completed, failed } = getCounts();
+      const completedQueueItems = queueIndex + 1;
+
+      setPlotlineBatchProgress({
+        total: pendingIndexes.length,
+        completed,
+        failed,
+        currentLabel:
+          completedQueueItems < pendingIndexes.length
+            ? nextFiles[pendingIndexes[queueIndex + 1]].name
+            : undefined,
+        progress: {
+          stage: completedQueueItems < pendingIndexes.length ? 'preparing' : 'finalizing',
+          message:
+            completedQueueItems < pendingIndexes.length
+              ? 'Loading next transcript...'
+              : 'Building company-level Plotline synthesis...',
+          percent: Math.round((completedQueueItems / pendingIndexes.length) * 92),
+        },
+      });
+    }
+
+    const resultFiles = nextFiles
+      .map((file) => file.result)
+      .filter((result): result is NonNullable<PlotlineBatchFile['result']> => Boolean(result));
+    const groupedCompanies = new Map<string, PlotlineCompanyResult>();
+
+    for (const fileResult of resultFiles) {
+      if (!Array.isArray(fileResult.quotes) || fileResult.quotes.length === 0) continue;
+      const companyKey = normalizeCompanyKey(fileResult);
+      const existing = groupedCompanies.get(companyKey);
+      if (!existing) {
+        groupedCompanies.set(companyKey, {
+          companyKey,
+          companyName: fileResult.companyName,
+          fiscalPeriod: fileResult.fiscalPeriod,
+          nseScrip: fileResult.nseScrip,
+          marketCapCategory: fileResult.marketCapCategory,
+          industry: fileResult.industry,
+          companyDescription: fileResult.companyDescription,
+          quotes: [...fileResult.quotes],
+          companyNarrative: '',
+        });
+      } else {
+        existing.quotes.push(...fileResult.quotes);
+      }
+    }
+
+    const companiesForNarrative: PlotlineNarrativeRequestCompany[] = Array.from(groupedCompanies.values())
+      .map((company) => {
+        const dedupedQuotes = dedupePlotlineQuotes(company.quotes)
+          .sort((left, right) => {
+            if (left.periodSortKey !== right.periodSortKey) {
+              return left.periodSortKey - right.periodSortKey;
+            }
+            return left.quote.localeCompare(right.quote);
+          })
+          .slice(0, PLOTLINE_MAX_QUOTES_PER_COMPANY);
+
+        return {
+          companyKey: company.companyKey,
+          companyName: company.companyName,
+          nseScrip: company.nseScrip,
+          marketCapCategory: company.marketCapCategory,
+          industry: company.industry,
+          companyDescription: company.companyDescription,
+          quotes: dedupedQuotes,
+        };
+      })
+      .filter((company) => company.quotes.length > 0);
+
+    if (companiesForNarrative.length === 0) {
+      setPlotlineSummary({
+        keywords: [...plotlineKeywords],
+        companies: [],
+        masterThemeBullets: [],
+      });
+      setPlotlineBatchProgress({
+        total: pendingIndexes.length,
+        completed: pendingIndexes.filter((index) => nextFiles[index].status === 'complete').length,
+        failed: pendingIndexes.filter((index) => nextFiles[index].status === 'error').length,
+        progress: {
+          stage: 'complete',
+          message: 'Batch complete. No keyword matches found in uploaded files.',
+          percent: 100,
+        },
+      });
+      setIsAnalyzingPlotlineBatch(false);
+      return;
+    }
+
+    try {
+      setPlotlineBatchProgress((prev) => ({
+        total: prev?.total ?? pendingIndexes.length,
+        completed: prev?.completed ?? pendingIndexes.length,
+        failed: prev?.failed ?? 0,
+        currentLabel: undefined,
+        progress: {
+          stage: 'finalizing',
+          message: 'Generating company narratives and master theme bullets...',
+          percent: 97,
+        },
+      }));
+
+      const narrativeResult = await summarizePlotlineTheme(
+        plotlineKeywords,
+        companiesForNarrative,
+        provider,
+        selectedPlotlineModel,
+      );
+      const narrativeMap = new Map(
+        narrativeResult.companyNarratives.map((item) => [item.companyKey, item.narrative]),
+      );
+
+      const companies = companiesForNarrative.map((company) => ({
+        ...company,
+        companyNarrative: narrativeMap.get(company.companyKey) || '',
+      }));
+
+      setPlotlineSummary({
+        keywords: [...plotlineKeywords],
+        companies,
+        masterThemeBullets: narrativeResult.masterThemeBullets,
+      });
+      setPlotlineBatchProgress((prev) => ({
+        total: prev?.total ?? pendingIndexes.length,
+        completed: prev?.completed ?? pendingIndexes.length,
+        failed: prev?.failed ?? 0,
+        currentLabel: undefined,
+        progress: {
+          stage: 'complete',
+          message: 'Plotline analysis complete.',
+          percent: 100,
+        },
+      }));
+    } catch (error: any) {
+      const companies = companiesForNarrative.map((company) => ({
+        ...company,
+        companyNarrative: '',
+      }));
+      setPlotlineSummary({
+        keywords: [...plotlineKeywords],
+        companies,
+        masterThemeBullets: [],
+      });
+      setPlotlineBatchProgress((prev) => ({
+        total: prev?.total ?? pendingIndexes.length,
+        completed: prev?.completed ?? pendingIndexes.length,
+        failed: prev?.failed ?? 0,
+        currentLabel: undefined,
+        progress: {
+          stage: 'error',
+          message: error?.message || 'Failed to generate Plotline synthesis.',
+          percent: 100,
+        },
+      }));
+    } finally {
+      setIsAnalyzingPlotlineBatch(false);
+    }
+  }, [plotlineBatchFiles, plotlineKeywords, provider, selectedPlotlineModel]);
+
   const removeBatchFile = (id: string) => {
     setBatchFiles((prev) => prev.filter((file) => file.id !== id));
   };
 
   const removePointsBatchFile = (id: string) => {
     setPointsBatchFiles((prev) => prev.filter((file) => file.id !== id));
+  };
+
+  const removePlotlineBatchFile = (id: string) => {
+    setPlotlineBatchFiles((prev) => prev.filter((file) => file.id !== id));
   };
 
   const retryBatchFile = (id: string) => {
@@ -1331,6 +1872,23 @@ const App: React.FC = () => {
     );
   };
 
+  const retryPlotlineBatchFile = (id: string) => {
+    if (isAnalyzingPlotlineBatch) return;
+    setPlotlineBatchFiles((prev) =>
+      prev.map((file) => {
+        if (file.id !== id) return file;
+        if (!file.content.trim()) return file;
+        return {
+          ...file,
+          status: 'ready',
+          error: undefined,
+          result: undefined,
+          progress: undefined,
+        };
+      }),
+    );
+  };
+
   const clearChatter = () => {
     setBatchFiles([]);
     setTextInput('');
@@ -1351,13 +1909,28 @@ const App: React.FC = () => {
     if (pointsFileInputRef.current) pointsFileInputRef.current.value = '';
   };
 
+  const clearPlotline = () => {
+    setPlotlineBatchFiles([]);
+    setIsAnalyzingPlotlineBatch(false);
+    setPlotlineBatchProgress(null);
+    setPlotlineKeywords([]);
+    setPlotlineKeywordInput('');
+    setPlotlineSummary(null);
+    setPlotlineCopyAllStatus('idle');
+    setPlotlineCopyAllErrorMessage('');
+    if (plotlineFileInputRef.current) plotlineFileInputRef.current.value = '';
+  };
+
   const completedResults = getCompletedChatterResults();
   const readyCount = batchFiles.filter((file) => file.status === 'ready').length;
   const completedPointsResults = getCompletedPointsResults();
   const pointsReadyCount = pointsBatchFiles.filter((file) => file.status === 'ready').length;
+  const plotlineReadyCount = plotlineBatchFiles.filter((file) => file.status === 'ready').length;
+  const plotlineCompanyCount = plotlineSummary?.companies.length ?? 0;
   const isTextLoading = chatterSingleState.status === 'analyzing';
   const isChatterLoading = isTextLoading || isAnalyzingBatch;
   const isPointsLoading = isAnalyzingPointsBatch;
+  const isPlotlineLoading = isAnalyzingPlotlineBatch;
   const isResumePromptVisible = Boolean(pendingResumeSession);
   const isResumeDecisionPending = isResumePromptVisible && !isPersistenceReady;
 
@@ -1796,6 +2369,246 @@ const App: React.FC = () => {
     </section>
   );
 
+  const renderPlotlineWorkbench = () => (
+    <section className="lg:col-span-5 lg:sticky lg:top-24 self-start">
+      <div className="rounded-2xl border border-line bg-white shadow-panel p-5 sm:p-6">
+        <header className="mb-5">
+          <p className="text-xs uppercase tracking-[0.16em] text-stone font-semibold">Input Desk</p>
+          <h2 className="font-serif text-2xl mt-1">Plotline Input</h2>
+        </header>
+
+        <div className="rounded-xl border border-line bg-canvas/45 p-4 mb-4">
+          <label className="block text-xs uppercase tracking-[0.14em] text-stone font-semibold mb-2">Theme Keywords</label>
+          <input
+            value={plotlineKeywordInput}
+            onChange={(event) => setPlotlineKeywordInput(event.target.value)}
+            onKeyDown={handlePlotlineKeywordInputKeyDown}
+            onBlur={handlePlotlineKeywordInputBlur}
+            disabled={isResumeDecisionPending}
+            placeholder="Add keywords (press Enter or comma)"
+            className="w-full rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:ring-2 focus:ring-brand/35"
+          />
+          <div className="mt-3 flex flex-wrap gap-2">
+            {plotlineKeywords.length === 0 && <p className="text-xs text-stone">Add at least one keyword to run Plotline.</p>}
+            {plotlineKeywords.map((keyword) => (
+              <span
+                key={keyword}
+                className="inline-flex items-center gap-2 rounded-full border border-brand/30 bg-brand-soft px-3 py-1 text-xs font-semibold text-brand"
+              >
+                {keyword}
+                <button
+                  onClick={() => removePlotlineKeyword(keyword)}
+                  disabled={isResumeDecisionPending || isPlotlineLoading}
+                  className="text-brand/75 hover:text-ink"
+                  aria-label={`Remove ${keyword}`}
+                  title="Remove keyword"
+                >
+                  X
+                </button>
+              </span>
+            ))}
+          </div>
+          <p className="mt-2 text-[11px] text-stone">
+            {plotlineKeywords.length}/{PLOTLINE_MAX_KEYWORDS} keywords
+          </p>
+        </div>
+
+        <div className="relative rounded-xl border-2 border-dashed border-line bg-canvas/45 px-4 py-7 text-center hover:border-brand/45 transition-colors">
+          <p className="text-sm font-medium text-stone">Drop or select transcript files</p>
+          <p className="text-xs text-stone/80 mt-1">Supports PDF and TXT</p>
+          <input
+            ref={plotlineFileInputRef}
+            type="file"
+            accept=".pdf,.txt"
+            multiple
+            onChange={handlePlotlineFileUpload}
+            disabled={isResumeDecisionPending}
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+          />
+        </div>
+
+        <div className="mt-4 space-y-2 max-h-[320px] overflow-y-auto pr-1">
+          {plotlineBatchFiles.length === 0 && (
+            <div className="rounded-xl border border-line bg-canvas px-4 py-5 text-center text-sm text-stone">
+              No Plotline files queued yet.
+            </div>
+          )}
+
+          {plotlineBatchFiles.map((file) => (
+            <div key={file.id} className="rounded-xl border border-line bg-white px-3 py-3">
+              <div className="flex items-start gap-3">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-ink truncate">{file.result?.companyName || file.name}</p>
+                  {file.error && (
+                    <p className={`text-xs mt-1 whitespace-normal break-words ${file.status === 'complete' ? 'text-amber-700' : 'text-rose-700'}`}>
+                      {file.status === 'complete' ? `Warning: ${file.error}` : file.error}
+                    </p>
+                  )}
+                  {file.progress?.message && file.status === 'analyzing' && (
+                    <p className="text-xs text-stone mt-1 truncate">{file.progress.message}</p>
+                  )}
+                </div>
+                <span
+                  className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.09em] ${
+                    statusStyles[file.status]
+                  }`}
+                >
+                  {statusLabels[file.status]}
+                </span>
+                {file.status === 'error' && (
+                  <button
+                    onClick={() => retryPlotlineBatchFile(file.id)}
+                    disabled={isResumeDecisionPending}
+                    className="text-xs font-semibold text-brand hover:text-ink"
+                    title="Retry file"
+                  >
+                    Retry
+                  </button>
+                )}
+                <button
+                  onClick={() => removePlotlineBatchFile(file.id)}
+                  disabled={isResumeDecisionPending || isPlotlineLoading}
+                  className="text-stone hover:text-rose-700 text-sm leading-none"
+                  title="Remove file"
+                  aria-label="Remove file"
+                >
+                  X
+                </button>
+              </div>
+              {file.status === 'analyzing' && typeof file.progress?.percent === 'number' && (
+                <div className="h-1.5 rounded-full bg-line mt-2 overflow-hidden">
+                  <div className="h-full bg-brand transition-all duration-300" style={{ width: `${file.progress.percent}%` }} />
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-5 pt-4 border-t border-line flex gap-3">
+          <button
+            onClick={clearPlotline}
+            disabled={isPlotlineLoading || isResumeDecisionPending}
+            className="px-4 py-2.5 rounded-xl border border-line text-sm font-semibold text-stone hover:text-ink disabled:opacity-50"
+          >
+            Clear
+          </button>
+          <button
+            onClick={handleAnalyzePlotlineBatch}
+            disabled={plotlineReadyCount === 0 || plotlineKeywords.length === 0 || isPlotlineLoading || isResumeDecisionPending}
+            className="flex-1 rounded-xl bg-brand text-white text-sm font-semibold py-2.5 px-4 disabled:opacity-50 hover:bg-brand/90 transition"
+          >
+            {isPlotlineLoading
+              ? 'Processing Batch...'
+              : `Analyze ${plotlineReadyCount} File${plotlineReadyCount === 1 ? '' : 's'}`}
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+
+  const renderPlotlineResults = () => (
+    <section className="lg:col-span-7 space-y-6">
+      {plotlineCompanyCount > 0 && (
+        <div className="rounded-2xl border border-line bg-white shadow-panel p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <p className="text-sm text-stone">
+            {plotlineCompanyCount} compan{plotlineCompanyCount === 1 ? 'y' : 'ies'} with keyword matches ready for Plotline export.
+          </p>
+          <button
+            onClick={handleCopyAllPlotline}
+            className={`inline-flex items-center justify-center rounded-xl border px-4 py-2 text-sm font-semibold transition ${
+              plotlineCopyAllStatus === 'copied'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                : 'border-brand bg-brand text-white hover:bg-brand/90'
+            }`}
+          >
+            {plotlineCopyAllStatus === 'copied' ? 'Copied All' : 'Copy All'}
+          </button>
+        </div>
+      )}
+
+      {plotlineCopyAllStatus === 'error' && plotlineCopyAllErrorMessage && (
+        <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{plotlineCopyAllErrorMessage}</div>
+      )}
+
+      {isPlotlineLoading && (
+        <>
+          <AnalysisProgressPanel
+            title="Plotline Batch Analysis Running"
+            subtitle="Matching keyword-led management remarks and building a cross-company narrative."
+            progress={plotlineBatchProgress?.progress}
+            batchStats={{
+              completed: plotlineBatchProgress?.completed ?? 0,
+              failed: plotlineBatchProgress?.failed ?? 0,
+              total: plotlineBatchProgress?.total ?? 0,
+              currentLabel: plotlineBatchProgress?.currentLabel,
+            }}
+          />
+          <QuoteSkeleton />
+          <QuoteSkeleton />
+        </>
+      )}
+
+      {!isPlotlineLoading && plotlineSummary && plotlineSummary.companies.length === 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          No keyword matches were found across the uploaded transcripts. Try broader or alternate keywords.
+        </div>
+      )}
+
+      {!isPlotlineLoading && !plotlineSummary && (
+        <div className="rounded-2xl border border-dashed border-line bg-white/70 p-10 text-center shadow-panel">
+          <h3 className="font-serif text-2xl text-ink">Ready for Plotline</h3>
+          <p className="text-sm text-stone mt-2">
+            Upload transcript files, add target keywords, and generate cross-company plotline evidence with synthesis.
+          </p>
+        </div>
+      )}
+
+      {plotlineSummary && plotlineSummary.masterThemeBullets.length > 0 && (
+        <div className="rounded-2xl border border-line bg-white shadow-panel p-5 sm:p-6">
+          <h3 className="font-serif text-2xl text-ink">Master Theme Summary</h3>
+          <ul className="mt-4 space-y-2 list-disc pl-5 text-sm text-stone leading-relaxed">
+            {plotlineSummary.masterThemeBullets.map((bullet, index) => (
+              <li key={`plotline-bullet-${index}`}>{bullet}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {plotlineSummary?.companies.map((company) => (
+        <div key={company.companyKey} className="rounded-2xl border border-line bg-white shadow-panel p-5 sm:p-6 space-y-5">
+          <header>
+            <h2 className="font-serif text-3xl text-ink">{company.companyName}</h2>
+            <p className="text-sm text-stone">
+              {company.marketCapCategory} | {company.industry}
+            </p>
+          </header>
+
+          {company.companyNarrative && (
+            <p className="rounded-xl border border-brand/20 bg-brand-soft/60 px-4 py-3 text-sm leading-relaxed text-ink">
+              {company.companyNarrative}
+            </p>
+          )}
+
+          <div className="space-y-4">
+            {company.quotes.map((quote, index) => (
+              <article key={`${company.companyKey}-${index}`} className="rounded-xl border border-line bg-canvas/45 px-4 py-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-stone">
+                  {quote.periodLabel} • {quote.matchedKeywords.join(', ')}
+                </p>
+                <blockquote className="mt-2 text-[15px] leading-relaxed italic text-ink">
+                  "{quote.quote}"
+                </blockquote>
+                <p className="mt-2 text-xs text-stone italic">
+                  — {quote.speakerName}, {quote.speakerDesignation}
+                </p>
+              </article>
+            ))}
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+
   return (
     <div className="min-h-screen text-ink relative overflow-x-hidden">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(15,118,110,0.12),transparent_45%),radial-gradient(circle_at_90%_20%,rgba(15,23,42,0.06),transparent_35%)]" />
@@ -1829,21 +2642,31 @@ const App: React.FC = () => {
                 <label className="text-sm font-semibold text-stone">
                   Model
                   <select
-                    value={appMode === 'chatter' ? selectedChatterModel : selectedPointsModel}
+                    value={
+                      appMode === 'chatter'
+                        ? selectedChatterModel
+                        : appMode === 'points'
+                          ? selectedPointsModel
+                          : selectedPlotlineModel
+                    }
                     disabled={isResumeDecisionPending}
                     onChange={(event) => {
                       const selectedModel = event.target.value as ModelType;
                       if (provider === ProviderType.GEMINI) {
                         if (appMode === 'chatter') {
                           setGeminiModel(selectedModel);
-                        } else {
+                        } else if (appMode === 'points') {
                           setGeminiPointsModel(selectedModel);
+                        } else {
+                          setGeminiPlotlineModel(selectedModel);
                         }
                       } else {
                         if (appMode === 'chatter') {
                           setOpenRouterModel(selectedModel);
-                        } else {
+                        } else if (appMode === 'points') {
                           setOpenRouterPointsModel(selectedModel);
+                        } else {
+                          setOpenRouterPlotlineModel(selectedModel);
                         }
                       }
                     }}
@@ -1867,7 +2690,7 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            <div className="inline-flex rounded-xl border border-line bg-white p-1 max-w-xl w-full">
+            <div className="inline-flex rounded-xl border border-line bg-white p-1 max-w-2xl w-full">
               <button
                 onClick={() => {
                   setAppMode('chatter');
@@ -1887,8 +2710,19 @@ const App: React.FC = () => {
                 className={`flex-1 rounded-lg py-2 text-sm font-semibold transition ${
                   appMode === 'points' ? 'bg-canvas text-ink shadow-sm' : 'text-stone hover:text-ink'
                 } disabled:opacity-50`}
-              >
+                >
                 Points & Figures
+              </button>
+              <button
+                onClick={() => {
+                  setAppMode('plotline');
+                }}
+                disabled={isResumeDecisionPending}
+                className={`flex-1 rounded-lg py-2 text-sm font-semibold transition ${
+                  appMode === 'plotline' ? 'bg-canvas text-ink shadow-sm' : 'text-stone hover:text-ink'
+                } disabled:opacity-50`}
+              >
+                Plotline
               </button>
             </div>
           </div>
@@ -1939,10 +2773,15 @@ const App: React.FC = () => {
               {renderChatterWorkbench()}
               {renderChatterResults()}
             </>
-          ) : (
+          ) : appMode === 'points' ? (
             <>
               {renderPointsWorkbench()}
               {renderPointsResults()}
+            </>
+          ) : (
+            <>
+              {renderPlotlineWorkbench()}
+              {renderPlotlineResults()}
             </>
           )}
         </div>
