@@ -12,7 +12,7 @@ const getCategoryStyle = (cat: string) => {
   if (cat.includes('Tech') || cat.includes('Disruption')) return 'bg-sky-50 text-sky-700 border-sky-200';
   if (cat.includes('Regulation') || cat.includes('Legal')) return 'bg-rose-50 text-rose-700 border-rose-200';
   if (cat.includes('Macro') || cat.includes('Climate')) return 'bg-indigo-50 text-indigo-700 border-indigo-200';
-  return 'bg-stone-100 text-stone-700 border-stone-200';
+  return 'bg-brand-soft text-brand border-brand/25';
 };
 
 const QuoteCard: React.FC<QuoteCardProps> = ({ quoteData, index }) => {
@@ -26,10 +26,10 @@ const QuoteCard: React.FC<QuoteCardProps> = ({ quoteData, index }) => {
   };
 
   return (
-    <article className="rounded-2xl border border-line bg-white shadow-panel p-5 sm:p-6">
+    <article className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-5 sm:p-6">
       <header className="flex items-start justify-between gap-4 mb-5">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="inline-flex items-center rounded-full bg-canvas border border-line px-2.5 py-1 text-xs font-semibold text-stone">
+          <span className="inline-flex items-center rounded-full bg-white border border-line px-2.5 py-1 text-xs font-semibold text-stone">
             Quote {index + 1}
           </span>
           <span
@@ -52,13 +52,13 @@ const QuoteCard: React.FC<QuoteCardProps> = ({ quoteData, index }) => {
         </button>
       </header>
 
-      <section className="rounded-xl border border-brand/20 bg-brand-soft/40 p-4 mb-5">
+      <section className="rounded-xl border border-brand/20 bg-brand-soft/55 p-4 mb-5">
         <p className="text-xs font-semibold uppercase tracking-[0.15em] text-brand mb-1.5">Context</p>
         <p className="text-sm leading-relaxed text-ink/90">{quoteData.summary}</p>
       </section>
 
-      <blockquote className="border-l-4 border-brand pl-4 sm:pl-5">
-        <p className="font-serif text-xl leading-relaxed text-ink italic">"{quoteData.quote}"</p>
+      <blockquote className="border-l-4 border-brand pl-4 sm:pl-5 py-1">
+        <p className="font-serif text-[1.35rem] leading-relaxed text-ink italic">"{quoteData.quote}"</p>
       </blockquote>
 
       <footer className="mt-5 pt-4 border-t border-line text-right">

@@ -91,7 +91,7 @@ const statusLabels: Record<BatchFile['status'], string> = {
 };
 
 const QuoteSkeleton: React.FC = () => (
-  <div className="rounded-2xl border border-line bg-white shadow-panel p-5 sm:p-6 animate-pulse">
+  <div className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-5 sm:p-6 animate-pulse">
     <div className="h-4 w-28 bg-line rounded mb-4" />
     <div className="h-20 bg-canvas rounded-xl mb-4" />
     <div className="h-5 w-11/12 bg-line rounded mb-2" />
@@ -101,7 +101,7 @@ const QuoteSkeleton: React.FC = () => (
 );
 
 const SlideSkeleton: React.FC = () => (
-  <div className="rounded-2xl border border-line bg-white shadow-panel p-5 sm:p-6 animate-pulse">
+  <div className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-5 sm:p-6 animate-pulse">
     <div className="h-6 w-48 bg-line rounded mb-4" />
     <div className="h-52 bg-canvas rounded-xl mb-4" />
     <div className="h-4 w-full bg-line rounded mb-2" />
@@ -2026,7 +2026,7 @@ const App: React.FC = () => {
 
   const renderChatterWorkbench = () => (
     <section className="lg:col-span-5 lg:sticky lg:top-24 self-start">
-      <div className="rounded-2xl border border-line bg-white shadow-panel p-5 sm:p-6">
+      <div className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-5 sm:p-6">
         <header className="mb-5">
           <p className="text-xs uppercase tracking-[0.16em] text-stone font-semibold">Input Desk</p>
           <h2 className="font-serif text-2xl mt-1">Transcript Input</h2>
@@ -2077,7 +2077,7 @@ const App: React.FC = () => {
               />
             </div>
 
-            <div className="mt-4 space-y-2 max-h-[320px] overflow-y-auto pr-1">
+            <div className="mt-4 space-y-2 max-h-[320px] overflow-y-auto pr-1 thin-scrollbar">
               {batchFiles.length === 0 && (
                 <div className="rounded-xl border border-line bg-canvas px-4 py-5 text-center text-sm text-stone">
                   No files queued yet.
@@ -2188,7 +2188,7 @@ const App: React.FC = () => {
       ) : (
         <>
           {completedResults.length > 0 && (
-            <div className="rounded-2xl border border-line bg-white shadow-panel p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <p className="text-sm text-stone">
                 {completedResults.length} compan{completedResults.length === 1 ? 'y' : 'ies'} ready for newsletter export.
               </p>
@@ -2247,7 +2247,7 @@ const App: React.FC = () => {
           )}
 
           {completedResults.length === 0 && !isChatterLoading && chatterSingleState.status !== 'error' && (
-            <div className="rounded-2xl border border-dashed border-line bg-white/70 p-10 text-center shadow-panel">
+            <div className="studio-empty rounded-2xl border border-dashed border-line bg-white/70 p-10 text-center shadow-panel">
               <h3 className="font-serif text-2xl text-ink">Ready to analyze</h3>
               <p className="text-sm text-stone mt-2">
                 Upload transcripts or paste text, then run analysis to generate quote-ready insight cards.
@@ -2291,7 +2291,7 @@ const App: React.FC = () => {
 
   const renderPointsWorkbench = () => (
     <section className="lg:col-span-5 lg:sticky lg:top-24 self-start">
-      <div className="rounded-2xl border border-line bg-white shadow-panel p-5 sm:p-6">
+      <div className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-5 sm:p-6">
         <header className="mb-5">
           <p className="text-xs uppercase tracking-[0.16em] text-stone font-semibold">Input Desk</p>
           <h2 className="font-serif text-2xl mt-1">Presentation Input</h2>
@@ -2311,7 +2311,7 @@ const App: React.FC = () => {
           />
         </div>
 
-        <div className="mt-4 space-y-2 max-h-[320px] overflow-y-auto pr-1">
+        <div className="mt-4 space-y-2 max-h-[320px] overflow-y-auto pr-1 thin-scrollbar">
           {pointsBatchFiles.length === 0 && (
             <div className="rounded-xl border border-line bg-canvas px-4 py-5 text-center text-sm text-stone">
               No presentation files queued yet.
@@ -2391,7 +2391,7 @@ const App: React.FC = () => {
   const renderPointsResults = () => (
     <section className="lg:col-span-7 space-y-6">
       {completedPointsResults.length > 0 && (
-        <div className="rounded-2xl border border-line bg-white shadow-panel p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <p className="text-sm text-stone">
             {completedPointsResults.length} compan{completedPointsResults.length === 1 ? 'y' : 'ies'} ready for Points export.
           </p>
@@ -2431,7 +2431,7 @@ const App: React.FC = () => {
       )}
 
       {completedPointsResults.length === 0 && !isPointsLoading && (
-        <div className="rounded-2xl border border-dashed border-line bg-white/70 p-10 text-center shadow-panel">
+        <div className="studio-empty rounded-2xl border border-dashed border-line bg-white/70 p-10 text-center shadow-panel">
           <h3 className="font-serif text-2xl text-ink">Ready to analyze a presentation</h3>
           <p className="text-sm text-stone mt-2">
             Upload one or more investor decks and we will surface the most meaningful long-term insight slides.
@@ -2461,7 +2461,7 @@ const App: React.FC = () => {
 
   const renderPlotlineWorkbench = () => (
     <section className="lg:col-span-5 lg:sticky lg:top-24 self-start">
-      <div className="rounded-2xl border border-line bg-white shadow-panel p-5 sm:p-6">
+      <div className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-5 sm:p-6">
         <header className="mb-5">
           <p className="text-xs uppercase tracking-[0.16em] text-stone font-semibold">Input Desk</p>
           <h2 className="font-serif text-2xl mt-1">Plotline Input</h2>
@@ -2517,7 +2517,7 @@ const App: React.FC = () => {
           />
         </div>
 
-        <div className="mt-4 space-y-2 max-h-[320px] overflow-y-auto pr-1">
+        <div className="mt-4 space-y-2 max-h-[320px] overflow-y-auto pr-1 thin-scrollbar">
           {plotlineBatchFiles.length === 0 && (
             <div className="rounded-xl border border-line bg-canvas px-4 py-5 text-center text-sm text-stone">
               No Plotline files queued yet.
@@ -2599,7 +2599,7 @@ const App: React.FC = () => {
   const renderPlotlineResults = () => (
     <section className="lg:col-span-7 space-y-6">
       {plotlineCompanyCount > 0 && (
-        <div className="rounded-2xl border border-line bg-white shadow-panel p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <p className="text-sm text-stone">
             {plotlineCompanyCount} compan{plotlineCompanyCount === 1 ? 'y' : 'ies'} with keyword matches ready for Plotline export.
           </p>
@@ -2645,7 +2645,7 @@ const App: React.FC = () => {
       )}
 
       {!isPlotlineLoading && !plotlineSummary && (
-        <div className="rounded-2xl border border-dashed border-line bg-white/70 p-10 text-center shadow-panel">
+        <div className="studio-empty rounded-2xl border border-dashed border-line bg-white/70 p-10 text-center shadow-panel">
           <h3 className="font-serif text-2xl text-ink">Ready for Plotline</h3>
           <p className="text-sm text-stone mt-2">
             Upload transcript files, add target keywords, and generate cross-company plotline evidence with synthesis.
@@ -2654,7 +2654,7 @@ const App: React.FC = () => {
       )}
 
       {plotlineSummary && plotlineSummary.masterThemeBullets.length > 0 && (
-        <div className="rounded-2xl border border-line bg-white shadow-panel p-5 sm:p-6">
+        <div className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-5 sm:p-6">
           <h3 className="font-serif text-2xl text-ink">Master Theme Summary</h3>
           <ul className="mt-4 space-y-2 list-disc pl-5 text-sm text-stone leading-relaxed">
             {plotlineSummary.masterThemeBullets.map((bullet, index) => (
@@ -2670,7 +2670,7 @@ const App: React.FC = () => {
           buildPlotlineNarrativeFallback(company.companyName, company.quotes, plotlineSummary.keywords);
 
         return (
-          <div key={company.companyKey} className="rounded-2xl border border-line bg-white shadow-panel p-5 sm:p-6 space-y-5">
+          <div key={company.companyKey} className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-5 sm:p-6 space-y-5">
             <header>
               <h2 className="font-serif text-3xl text-ink">{company.companyName}</h2>
               <p className="text-sm text-stone">
@@ -2704,15 +2704,15 @@ const App: React.FC = () => {
   );
 
   return (
-    <div className="min-h-screen text-ink relative overflow-x-hidden">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(15,118,110,0.12),transparent_45%),radial-gradient(circle_at_90%_20%,rgba(15,23,42,0.06),transparent_35%)]" />
+    <div className="app-shell min-h-screen text-ink relative overflow-x-hidden">
+      <div className="app-atmosphere" />
 
-      <header className="sticky top-0 z-20 border-b border-line bg-canvas/90 backdrop-blur">
+      <header className="app-header sticky top-0 z-20 border-b border-line">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex flex-col gap-4">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div className="flex items-center gap-3">
-                <div className="h-9 w-9 rounded-lg bg-brand text-white font-serif font-bold text-xl grid place-items-center">C</div>
+                <div className="brand-mark h-10 w-10 rounded-xl text-white font-serif font-bold text-xl grid place-items-center">C</div>
                 <div>
                   <h1 className="font-serif text-2xl leading-none">Chatter Analyst</h1>
                   <p className="text-xs uppercase tracking-[0.15em] text-stone mt-1">Research Workflow Studio</p>
@@ -2720,20 +2720,20 @@ const App: React.FC = () => {
               </div>
 
               <div className="flex flex-wrap items-center justify-end gap-3">
-                <label className="text-sm font-semibold text-stone">
+                <label className="control-label">
                   Provider
                   <select
                     value={provider}
                     onChange={(event) => setProvider(event.target.value as ProviderType)}
                     disabled={isResumeDecisionPending}
-                    className="ml-2 rounded-lg border border-line bg-white px-3 py-1.5 text-sm text-ink"
+                    className="control-select"
                   >
                     <option value={ProviderType.GEMINI}>Gemini</option>
                     <option value={ProviderType.OPENROUTER}>OpenRouter</option>
                   </select>
                 </label>
 
-                <label className="text-sm font-semibold text-stone">
+                <label className="control-label">
                   Model
                   <select
                     value={
@@ -2764,7 +2764,7 @@ const App: React.FC = () => {
                         }
                       }
                     }}
-                    className="ml-2 rounded-lg border border-line bg-white px-3 py-1.5 text-sm text-ink"
+                    className="control-select"
                   >
                     {currentModelOptions.map((option) => (
                       <option key={option.value} value={option.value}>
@@ -2776,7 +2776,7 @@ const App: React.FC = () => {
 
                 <button
                   onClick={handleClearSavedSessionData}
-                  className="rounded-lg border border-line bg-white px-3 py-1.5 text-sm font-semibold text-stone hover:text-ink"
+                  className="ghost-btn px-3 py-1.5 text-sm font-semibold"
                   title="Clear saved browser session"
                 >
                   Clear Saved Session
@@ -2784,14 +2784,14 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            <div className="inline-flex rounded-xl border border-line bg-white p-1 max-w-2xl w-full">
+            <div className="mode-tabs inline-flex rounded-xl border border-line p-1 max-w-2xl w-full">
               <button
                 onClick={() => {
                   setAppMode('chatter');
                 }}
                 disabled={isResumeDecisionPending}
-                className={`flex-1 rounded-lg py-2 text-sm font-semibold transition ${
-                  appMode === 'chatter' ? 'bg-canvas text-ink shadow-sm' : 'text-stone hover:text-ink'
+                className={`mode-tab-btn flex-1 transition ${
+                  appMode === 'chatter' ? 'mode-tab-active' : 'mode-tab-idle'
                 } disabled:opacity-50`}
               >
                 The Chatter
@@ -2801,8 +2801,8 @@ const App: React.FC = () => {
                   setAppMode('points');
                 }}
                 disabled={isResumeDecisionPending}
-                className={`flex-1 rounded-lg py-2 text-sm font-semibold transition ${
-                  appMode === 'points' ? 'bg-canvas text-ink shadow-sm' : 'text-stone hover:text-ink'
+                className={`mode-tab-btn flex-1 transition ${
+                  appMode === 'points' ? 'mode-tab-active' : 'mode-tab-idle'
                 } disabled:opacity-50`}
                 >
                 Points & Figures
@@ -2812,8 +2812,8 @@ const App: React.FC = () => {
                   setAppMode('plotline');
                 }}
                 disabled={isResumeDecisionPending}
-                className={`flex-1 rounded-lg py-2 text-sm font-semibold transition ${
-                  appMode === 'plotline' ? 'bg-canvas text-ink shadow-sm' : 'text-stone hover:text-ink'
+                className={`mode-tab-btn flex-1 transition ${
+                  appMode === 'plotline' ? 'mode-tab-active' : 'mode-tab-idle'
                 } disabled:opacity-50`}
               >
                 Plotline
@@ -2823,7 +2823,7 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      <main className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="app-main relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {isResumePromptVisible && pendingResumeSession && (
           <div className="mb-5 rounded-2xl border border-brand/35 bg-brand-soft px-5 py-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -2861,7 +2861,7 @@ const App: React.FC = () => {
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
+        <div className="workspace-grid grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
           {appMode === 'chatter' ? (
             <>
               {renderChatterWorkbench()}

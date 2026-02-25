@@ -550,7 +550,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
   };
 
   return (
-    <section className="rounded-2xl border border-line bg-white shadow-panel p-5 sm:p-6 space-y-5">
+    <section className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-5 sm:p-6 space-y-5">
       <header className="space-y-2">
         <div className="flex items-center justify-between gap-3">
           <div>
@@ -558,7 +558,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
             <h3 className="font-serif text-2xl text-ink">Thread Composer (X)</h3>
           </div>
           <div className="flex items-center gap-2">
-            <span className="rounded-full border border-brand/25 bg-brand-soft/55 px-3 py-1 text-xs font-semibold text-brand">
+            <span className="studio-badge rounded-full px-3 py-1 text-xs font-semibold">
               {provider === "gemini" ? "Gemini" : "OpenRouter"} • {model}
             </span>
             <button
@@ -625,7 +625,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
       )}
 
       {(source || hasGeneratedThread) && (
-        <div className="sticky top-4 z-10 rounded-xl border border-line bg-white/95 px-3 py-2 backdrop-blur">
+        <div className="sticky top-4 z-10 rounded-xl border border-line bg-white/92 px-3 py-2 backdrop-blur studio-panel">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="inline-flex rounded-lg border border-line bg-canvas p-1">
               <button
@@ -722,15 +722,15 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
             </header>
 
             {shortlistStatus === "loading" ? (
-              <div className="rounded-lg border border-dashed border-line bg-canvas/30 px-4 py-6 text-sm text-stone text-center">
+              <div className="studio-empty rounded-lg border border-dashed border-line bg-canvas/30 px-4 py-6 text-sm text-stone text-center">
                 Building candidate shortlist...
               </div>
             ) : shortlistedQuotes.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-line bg-canvas/30 px-4 py-6 text-sm text-stone text-center">
+              <div className="studio-empty rounded-lg border border-dashed border-line bg-canvas/30 px-4 py-6 text-sm text-stone text-center">
                 No shortlist candidates available yet. You can still choose from the full universe below.
               </div>
             ) : (
-              <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+              <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1 thin-scrollbar">
                 {shortlistedQuotes.map((quote, index) =>
                   renderQuoteCandidateCard(quote, { badgeLabel: `Candidate ${index + 1}` }),
                 )}
@@ -746,7 +746,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
               </p>
             </header>
 
-            <div className="space-y-4 max-h-[560px] overflow-y-auto pr-1">
+            <div className="space-y-4 max-h-[560px] overflow-y-auto pr-1 thin-scrollbar">
               {source.companies.map((company) => (
                 <article key={`${company.companyName}-${company.industry}`} className="rounded-xl border border-line bg-canvas/20 p-4">
                   <header className="mb-3">
@@ -781,7 +781,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
           </div>
 
           {!hasGeneratedThread && (
-            <div className="rounded-xl border border-dashed border-line bg-canvas/30 px-4 py-8 text-center text-sm text-stone">
+            <div className="studio-empty rounded-xl border border-dashed border-line bg-canvas/30 px-4 py-8 text-center text-sm text-stone">
               No generated thread yet. Select quotes and click Generate Thread to populate this view.
             </div>
           )}

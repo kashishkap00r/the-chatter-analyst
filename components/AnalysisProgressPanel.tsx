@@ -49,14 +49,14 @@ const AnalysisProgressPanel: React.FC<AnalysisProgressPanelProps> = ({ title, su
   const percent = Math.min(100, Math.max(0, progress?.percent ?? stageFallbackPercent[currentStage]));
 
   return (
-    <section className="rounded-2xl border border-line bg-white shadow-panel p-5 sm:p-6">
+    <section className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-5 sm:p-6">
       <header className="mb-4">
         <p className="text-xs uppercase tracking-[0.18em] text-stone font-semibold">Live Activity</p>
         <h3 className="font-serif text-2xl text-ink mt-1">{title}</h3>
         <p className="text-sm text-stone mt-1">{subtitle}</p>
       </header>
 
-      <div className="rounded-xl border border-brand/20 bg-brand-soft/50 p-4 mb-5">
+      <div className="rounded-xl border border-brand/20 bg-brand-soft/55 p-4 mb-5">
         <LoadingState message={progress?.message || 'Working...'} compact />
       </div>
 
@@ -67,14 +67,14 @@ const AnalysisProgressPanel: React.FC<AnalysisProgressPanelProps> = ({ title, su
         </div>
         <div className="h-2 rounded-full bg-line overflow-hidden">
           <div
-            className="h-full bg-brand transition-all duration-500 ease-out"
+            className="h-full bg-brand transition-all duration-500 ease-out shadow-[0_0_18px_rgba(56,126,209,0.42)]"
             style={{ width: `${percent}%` }}
           />
         </div>
       </div>
 
       {batchStats && (
-        <div className="rounded-xl border border-line bg-canvas p-4 mb-5 text-sm text-stone space-y-1">
+        <div className="rounded-xl border border-line bg-canvas/75 p-4 mb-5 text-sm text-stone space-y-1">
           <p>
             Processed <span className="font-semibold text-ink">{batchStats.completed + batchStats.failed}</span> of{' '}
             <span className="font-semibold text-ink">{batchStats.total}</span>
@@ -101,7 +101,7 @@ const AnalysisProgressPanel: React.FC<AnalysisProgressPanelProps> = ({ title, su
             <li key={stage} className="flex items-center gap-3 text-sm">
               <span
                 className={`w-2.5 h-2.5 rounded-full ${
-                  isDone ? 'bg-brand' : isActive ? 'bg-amber-500 animate-pulse' : 'bg-line'
+                  isDone ? 'bg-brand' : isActive ? 'bg-accent animate-pulse-soft' : 'bg-line'
                 }`}
               />
               <span className={`${isActive ? 'text-ink font-semibold' : 'text-stone'}`}>{stageLabels[stage]}</span>
