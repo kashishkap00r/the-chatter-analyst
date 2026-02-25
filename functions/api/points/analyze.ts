@@ -36,6 +36,8 @@ const MAX_SELECTED_SLIDES = 10;
 const MAX_CONTEXT_SENTENCES = 2;
 const MAX_CONTEXT_CHARACTERS = 420;
 const MAX_CONTEXT_REWRITE_CANDIDATES = 6;
+const MIN_REVIEW_CONFIDENCE = 0.58;
+const HIGH_CONFIDENCE_DROP_THRESHOLD = 0.78;
 
 const POINTS_CONTEXT_REWRITE_SCHEMA = {
   type: "OBJECT",
@@ -53,6 +55,27 @@ const POINTS_CONTEXT_REWRITE_SCHEMA = {
     },
   },
   required: ["rewrites"],
+};
+
+const POINTS_SLIDE_REVIEW_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    reviews: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          selectedPageNumber: { type: "INTEGER" },
+          status: { type: "STRING" },
+          reasonCode: { type: "STRING" },
+          confidence: { type: "NUMBER" },
+          context: { type: "STRING" },
+        },
+        required: ["selectedPageNumber", "status", "reasonCode", "confidence", "context"],
+      },
+    },
+  },
+  required: ["reviews"],
 };
 
 interface ChunkRange {
@@ -343,6 +366,29 @@ const JARGON_TERMS = [
   "read through",
 ];
 
+const MARKETING_TERMS = [
+  "award",
+  "awards",
+  "recognition",
+  "esg",
+  "csr",
+  "sustainability",
+  "vision",
+  "mission",
+  "values",
+  "brand campaign",
+  "customer delight",
+  "customer centric",
+  "employee engagement",
+  "great place to work",
+  "stakeholder",
+  "transformation journey",
+  "digital journey",
+  "purpose",
+  "leadership position",
+  "industry leading",
+];
+
 interface SlideEntry {
   selectedPageNumber: number;
   context: string;
@@ -360,6 +406,27 @@ interface ContextRewriteResult {
     selectedPageNumber: number;
     context: string;
   }>;
+}
+
+interface SlideReviewEntry {
+  selectedPageNumber: number;
+  status: "keep" | "drop";
+  reasonCode: string;
+  confidence: number;
+  context: string;
+}
+
+interface SlideReviewPayload {
+  reviews: SlideReviewEntry[];
+}
+
+interface SlideReviewOutcome {
+  slides: SlideEntry[];
+  reviewedCount: number;
+  droppedCount: number;
+  mismatchDropped: number;
+  marketingDropped: number;
+  weakSignalDropped: number;
 }
 
 const splitSentences = (value: string): string[] =>
@@ -389,6 +456,17 @@ const clampContextLength = (value: string): string => {
 const containsFinancialLanguage = (value: string): boolean => {
   const lower = value.toLowerCase();
   return countTermHits(lower, FINANCIAL_TERMS) > 0;
+};
+
+const hasNumericEvidence = (value: string): boolean =>
+  /(?:\d+[%x]?|bps|crore|lakh|million|billion|mn|bn|mt|gw|units?)/i.test(value);
+
+const isLikelyMarketingContext = (value: string): boolean => {
+  const lower = value.toLowerCase();
+  const marketingHits = countTermHits(lower, MARKETING_TERMS);
+  const inferenceHits = countTermHits(lower, INFERENCE_TERMS);
+  const noveltyHits = countTermHits(lower, NOVELTY_TERMS);
+  return marketingHits >= 2 && inferenceHits === 0 && noveltyHits === 0 && !hasNumericEvidence(value);
 };
 
 const contextNeedsRewrite = (value: string): { needsRewrite: boolean; reason: string } => {
@@ -428,14 +506,17 @@ const scoreContextQuality = (value: string): number => {
   const noveltyHits = countTermHits(lower, NOVELTY_TERMS);
   const descriptiveHits = countTermHits(lower, DESCRIPTIVE_TERMS);
   const routineHits = countTermHits(lower, ROUTINE_TERMS);
+  const marketingHits = countTermHits(lower, MARKETING_TERMS);
   const sentencePenalty = Math.max(0, splitSentences(value).length - MAX_CONTEXT_SENTENCES);
   const financialPenalty = containsFinancialLanguage(value) && inferenceHits === 0 ? 2 : 0;
+  const marketingPenalty = isLikelyMarketingContext(value) ? 3 : Math.min(2, marketingHits);
 
   return (
     inferenceHits * 3 +
     noveltyHits * 2 -
     descriptiveHits * 2 -
     routineHits -
+    marketingPenalty -
     sentencePenalty -
     financialPenalty
   );
@@ -517,6 +598,97 @@ const normalizeRewritePayload = (value: any): ContextRewriteResult => {
     }));
 
   return { rewrites };
+};
+
+const normalizeSlideReviewPayload = (value: any): SlideReviewPayload => {
+  if (!value || typeof value !== "object" || !Array.isArray(value.reviews)) {
+    return { reviews: [] };
+  }
+
+  const reviews = value.reviews
+    .filter((item: any) => item && Number.isInteger(item.selectedPageNumber))
+    .map((item: any) => {
+      const normalizedStatus = typeof item.status === "string" ? item.status.trim().toLowerCase() : "";
+      const normalizedReason = typeof item.reasonCode === "string" ? item.reasonCode.trim().toLowerCase() : "ok";
+      const parsedConfidence = Number(item.confidence);
+      const confidence =
+        Number.isFinite(parsedConfidence) && parsedConfidence >= 0
+          ? Math.min(1, Math.max(0, parsedConfidence))
+          : 0.5;
+      const context = hasNonEmptyString(item.context) ? sanitizeContext(clampContextLength(item.context)) : "";
+
+      return {
+        selectedPageNumber: Number(item.selectedPageNumber),
+        status: normalizedStatus === "drop" ? "drop" : "keep",
+        reasonCode: normalizedReason || "ok",
+        confidence,
+        context,
+      } as SlideReviewEntry;
+    });
+
+  return { reviews };
+};
+
+const applyMarketingPrefilter = (slides: SlideEntry[]): { slides: SlideEntry[]; droppedCount: number } => {
+  if (slides.length === 0) return { slides, droppedCount: 0 };
+
+  const marketingSlides = slides.filter((slide) => isLikelyMarketingContext(slide.context));
+  if (marketingSlides.length === 0) {
+    return { slides, droppedCount: 0 };
+  }
+
+  const keptSlides = slides.filter((slide) => !isLikelyMarketingContext(slide.context));
+  if (keptSlides.length >= Math.min(3, slides.length)) {
+    return {
+      slides: keptSlides,
+      droppedCount: marketingSlides.length,
+    };
+  }
+
+  return { slides, droppedCount: 0 };
+};
+
+const buildSlideReviewPrompt = (
+  slides: SlideEntry[],
+  companyName: string,
+  industry: string,
+): string => {
+  const payload = slides.map((slide, index) => ({
+    selectedPageNumber: slide.selectedPageNumber,
+    currentContext: slide.context,
+    imageRef: `image_${index + 1}`,
+  }));
+
+  return [
+    "You are reviewing candidate slide insights for quality control.",
+    `Company: ${companyName || "Unknown"}`,
+    `Industry: ${industry || "Unknown"}`,
+    "",
+    "You will receive one image per candidate in the same order as INPUT imageRef values.",
+    "For each candidate, decide if context is truly matched to that exact slide and has real investor signal.",
+    "",
+    "KEEP only if all are true:",
+    "- Context clearly belongs to that exact slide (not another slide).",
+    "- Context explains why the slide matters, not just what is visible.",
+    "- Insight is not generic corporate marketing language.",
+    "",
+    "DROP when any are true:",
+    "- Context does not match slide evidence (mismatch/wrong slide).",
+    "- Slide is mostly branding, awards, ESG PR, slogans, or other promotional material with weak analytical signal.",
+    "- Context is too generic to justify inclusion.",
+    "",
+    "If keeping, rewrite context into plain-English, insight-first, max 2 short sentences.",
+    "Do not narrate obvious visuals. Keep direct and specific.",
+    "",
+    "Return JSON only:",
+    "{",
+    '  "reviews": [',
+    '    {"selectedPageNumber": 1, "status": "keep|drop", "reasonCode": "ok|mismatch|marketing|weak_signal", "confidence": 0.0-1.0, "context": "string"}',
+    "  ]",
+    "}",
+    "",
+    `INPUT: ${JSON.stringify(payload)}`,
+  ].join("\n");
 };
 
 const selectBestSlides = (slides: SlideEntry[]): SlideEntry[] => {
@@ -738,6 +910,220 @@ const extractBase64 = (dataUri: string): string => {
     return dataUri.slice(commaIndex + 1);
   }
   return dataUri;
+};
+
+const extractMimeType = (dataUri: string): string => {
+  const match = /^data:([^;,]+)[;,]/i.exec(dataUri.trim());
+  if (match && hasNonEmptyString(match[1])) {
+    return match[1].trim();
+  }
+  return "image/jpeg";
+};
+
+const applySlideReviewIfNeeded = async (params: {
+  provider: string;
+  requestId: string;
+  model: string;
+  providerPreference?: ReturnType<typeof normalizeGeminiProviderPreference>;
+  geminiApiKey?: string;
+  vertexApiKey?: string;
+  openRouterApiKey?: string;
+  openRouterSiteUrl?: string;
+  openRouterAppTitle?: string;
+  companyName: string;
+  industry: string;
+  slides: SlideEntry[];
+  pageImages: string[];
+}): Promise<SlideReviewOutcome> => {
+  const {
+    provider,
+    requestId,
+    model,
+    providerPreference,
+    geminiApiKey,
+    vertexApiKey,
+    openRouterApiKey,
+    openRouterSiteUrl,
+    openRouterAppTitle,
+    companyName,
+    industry,
+    slides,
+    pageImages,
+  } = params;
+
+  if (slides.length === 0) {
+    return {
+      slides,
+      reviewedCount: 0,
+      droppedCount: 0,
+      mismatchDropped: 0,
+      marketingDropped: 0,
+      weakSignalDropped: 0,
+    };
+  }
+
+  const reviewCandidates = slides
+    .map((slide) => ({
+      ...slide,
+      pageAsImage: pageImages[slide.selectedPageNumber - 1],
+    }))
+    .filter((slide) => hasNonEmptyString(slide.pageAsImage));
+
+  if (reviewCandidates.length === 0) {
+    return {
+      slides,
+      reviewedCount: 0,
+      droppedCount: 0,
+      mismatchDropped: 0,
+      marketingDropped: 0,
+      weakSignalDropped: 0,
+    };
+  }
+
+  const reviewPrompt = buildSlideReviewPrompt(reviewCandidates, companyName, industry);
+
+  let reviewRaw: any;
+  try {
+    reviewRaw =
+      provider === PROVIDER_GEMINI
+        ? await callGeminiJson({
+            apiKey: geminiApiKey as string,
+            vertexApiKey,
+            providerPreference,
+            requestId,
+            model,
+            contents: [
+              {
+                parts: [
+                  { text: reviewPrompt },
+                  ...reviewCandidates.map((slide) => ({
+                    inlineData: {
+                      mimeType: extractMimeType(slide.pageAsImage),
+                      data: extractBase64(slide.pageAsImage),
+                    },
+                  })),
+                ],
+              },
+            ],
+            responseSchema: POINTS_SLIDE_REVIEW_SCHEMA,
+          })
+        : await callOpenRouterJson({
+            apiKey: openRouterApiKey as string,
+            model,
+            requestId,
+            referer: openRouterSiteUrl,
+            appTitle: openRouterAppTitle || "The Chatter Analyst",
+            messageContent: [
+              {
+                type: "text",
+                text: reviewPrompt,
+              },
+              ...reviewCandidates.map((slide) => ({
+                type: "image_url" as const,
+                image_url: { url: slide.pageAsImage },
+              })),
+            ],
+          });
+  } catch (reviewError: any) {
+    console.log(
+      JSON.stringify({
+        event: "points_slide_review_failed",
+        requestId,
+        model,
+        provider,
+        candidateCount: reviewCandidates.length,
+        message: String(reviewError?.message || "Unknown slide review failure"),
+      }),
+    );
+    return {
+      slides,
+      reviewedCount: 0,
+      droppedCount: 0,
+      mismatchDropped: 0,
+      marketingDropped: 0,
+      weakSignalDropped: 0,
+    };
+  }
+
+  const reviewPayload = normalizeSlideReviewPayload(reviewRaw);
+  if (!Array.isArray(reviewPayload.reviews) || reviewPayload.reviews.length === 0) {
+    return {
+      slides,
+      reviewedCount: 0,
+      droppedCount: 0,
+      mismatchDropped: 0,
+      marketingDropped: 0,
+      weakSignalDropped: 0,
+    };
+  }
+
+  const reviewByPage = new Map<number, SlideReviewEntry>();
+  for (const review of reviewPayload.reviews) {
+    if (!reviewCandidates.some((slide) => slide.selectedPageNumber === review.selectedPageNumber)) {
+      continue;
+    }
+    reviewByPage.set(review.selectedPageNumber, review);
+  }
+
+  let mismatchDropped = 0;
+  let marketingDropped = 0;
+  let weakSignalDropped = 0;
+  let droppedCount = 0;
+  let reviewedCount = 0;
+
+  const reviewedSlides: SlideEntry[] = [];
+  for (const slide of slides) {
+    const review = reviewByPage.get(slide.selectedPageNumber);
+    if (!review) {
+      reviewedSlides.push(slide);
+      continue;
+    }
+
+    reviewedCount += 1;
+    const reason = review.reasonCode.toLowerCase();
+    const confidence = review.confidence;
+    const reasonIsMismatch =
+      reason.includes("mismatch") || reason.includes("wrong_slide") || reason.includes("wrong");
+    const reasonIsMarketing =
+      reason.includes("marketing") || reason.includes("promotional") || reason.includes("branding") || reason.includes("pr");
+    const reasonIsWeak = reason.includes("weak") || reason.includes("generic") || reason.includes("low_signal");
+
+    const shouldDropMismatch = reasonIsMismatch && confidence >= MIN_REVIEW_CONFIDENCE;
+    const shouldDropMarketing = reasonIsMarketing && confidence >= MIN_REVIEW_CONFIDENCE;
+    const shouldDropWeakSignal =
+      reasonIsWeak && review.status === "drop" && confidence >= HIGH_CONFIDENCE_DROP_THRESHOLD;
+
+    if (shouldDropMismatch || shouldDropMarketing || shouldDropWeakSignal) {
+      droppedCount += 1;
+      if (shouldDropMismatch) mismatchDropped += 1;
+      if (shouldDropMarketing) marketingDropped += 1;
+      if (shouldDropWeakSignal) weakSignalDropped += 1;
+      continue;
+    }
+
+    const nextContext = hasNonEmptyString(review.context)
+      ? sanitizeContext(clampContextLength(review.context))
+      : slide.context;
+    reviewedSlides.push({
+      ...slide,
+      context: nextContext,
+    });
+  }
+
+  const heuristicFiltered = applyMarketingPrefilter(reviewedSlides);
+  if (heuristicFiltered.droppedCount > 0) {
+    marketingDropped += heuristicFiltered.droppedCount;
+    droppedCount += heuristicFiltered.droppedCount;
+  }
+
+  return {
+    slides: heuristicFiltered.slides,
+    reviewedCount,
+    droppedCount,
+    mismatchDropped,
+    marketingDropped,
+    weakSignalDropped,
+  };
 };
 
 const applyContextRewriteIfNeeded = async (params: {
@@ -1057,29 +1443,89 @@ export async function onRequestPost(context: any): Promise<Response> {
         slides: initialSlides,
       });
 
-      const selectedSlides = selectBestSlides(
-        rewriteOutcome.slides.map((slide) => ({
+      const normalizedSlides = rewriteOutcome.slides.map((slide) => ({
+        selectedPageNumber: slide.selectedPageNumber,
+        context: clampContextLength(sanitizeContext(slide.context)),
+      }));
+
+      const prefilterOutcome = applyMarketingPrefilter(normalizedSlides);
+      const selectedSlides = selectBestSlides(prefilterOutcome.slides);
+
+      const reviewOutcome = await applySlideReviewIfNeeded({
+        provider,
+        requestId,
+        model: attemptModel,
+        providerPreference,
+        geminiApiKey: primaryApiKey,
+        vertexApiKey: env.VERTEX_API_KEY,
+        openRouterApiKey,
+        openRouterSiteUrl: env.OPENROUTER_SITE_URL,
+        openRouterAppTitle: env.OPENROUTER_APP_TITLE,
+        companyName: hasNonEmptyString(result?.companyName) ? result.companyName : "",
+        industry: hasNonEmptyString(result?.industry) ? result.industry : "",
+        slides: selectedSlides,
+        pageImages,
+      });
+
+      const reviewedSelectedSlides = selectBestSlides(
+        reviewOutcome.slides.map((slide) => ({
           selectedPageNumber: slide.selectedPageNumber,
           context: clampContextLength(sanitizeContext(slide.context)),
         })),
       );
 
-      if (selectedSlides.length === 0) {
+      if (reviewedSelectedSlides.length === 0) {
         return error(
           VALIDATION_STATUS,
           "UPSTREAM_ERROR",
-          "Presentation analysis returned no usable slides after quality filtering.",
+          "Presentation analysis returned no usable slides after slide-context verification.",
           "VALIDATION_FAILED",
           {
             requestId,
             model: attemptModel,
             initialSlides: initialSlides.length,
+            selectedSlidesBeforeReview: selectedSlides.length,
             rewriteAppliedCount: rewriteOutcome.rewriteAppliedCount,
+            prefilterDropped: prefilterOutcome.droppedCount,
+            reviewDropped: reviewOutcome.droppedCount,
+            reviewMismatchDropped: reviewOutcome.mismatchDropped,
+            reviewMarketingDropped: reviewOutcome.marketingDropped,
+            reviewWeakSignalDropped: reviewOutcome.weakSignalDropped,
           },
         );
       }
 
-      result.slides = selectedSlides;
+      result.slides = reviewedSelectedSlides;
+
+      if (prefilterOutcome.droppedCount > 0 || reviewOutcome.droppedCount > 0) {
+        console.log(
+          JSON.stringify({
+            event: "points_slide_drop_summary",
+            requestId,
+            model: attemptModel,
+            prefilterDropped: prefilterOutcome.droppedCount,
+            reviewDropped: reviewOutcome.droppedCount,
+            reviewMismatchDropped: reviewOutcome.mismatchDropped,
+            reviewMarketingDropped: reviewOutcome.marketingDropped,
+            reviewWeakSignalDropped: reviewOutcome.weakSignalDropped,
+          }),
+        );
+      }
+
+      const selectedSlidePageSet = new Set(result.slides.map((slide: SlideEntry) => slide.selectedPageNumber));
+      const unmatchedSlides = selectedSlides.filter((slide) => !selectedSlidePageSet.has(slide.selectedPageNumber));
+
+      if (unmatchedSlides.length > 0) {
+        console.log(
+          JSON.stringify({
+            event: "points_slide_removed_after_review",
+            requestId,
+            model: attemptModel,
+            removedCount: unmatchedSlides.length,
+            removedPages: unmatchedSlides.map((slide) => slide.selectedPageNumber),
+          }),
+        );
+      }
 
       console.log(
         JSON.stringify({
@@ -1088,9 +1534,16 @@ export async function onRequestPost(context: any): Promise<Response> {
           provider,
           requestedModel: model,
           resolvedModel: attemptModel,
-          slides: selectedSlides.length,
+          slides: result.slides.length,
           initialSlides: initialSlides.length,
           rewriteAppliedCount: rewriteOutcome.rewriteAppliedCount,
+          prefilterDropped: prefilterOutcome.droppedCount,
+          reviewInputSlides: selectedSlides.length,
+          reviewReviewedCount: reviewOutcome.reviewedCount,
+          reviewDropped: reviewOutcome.droppedCount,
+          reviewMismatchDropped: reviewOutcome.mismatchDropped,
+          reviewMarketingDropped: reviewOutcome.marketingDropped,
+          reviewWeakSignalDropped: reviewOutcome.weakSignalDropped,
           normalizedPageCount: validation.normalizedPageCount,
           chunkStartPage: chunkRange?.startPage ?? null,
           chunkEndPage: chunkRange?.endPage ?? null,

@@ -1307,6 +1307,7 @@ const App: React.FC = () => {
 
         let result = mergedResult;
         const qualityWarnings: string[] = [];
+        updateFinalizingProgress('Finalizing: verifying slide-context fit and filtering low-signal slides...', 91);
         const selectedPages = Array.from(
           new Set(
             mergedResult.slides

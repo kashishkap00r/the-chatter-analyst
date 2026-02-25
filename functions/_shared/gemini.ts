@@ -260,6 +260,8 @@ SLIDE SELECTION RULES
 - Strict novelty-first: prefer slides that reveal something non-obvious, new, or structurally important versus standard recurring updates.
 - Favor slides that reveal industry structure, durable demand/supply shifts, capital allocation, M&A, product mix change, moat/competition, unit economics, regulatory change, or management strategy pivot.
 - De-prioritize generic slides likely repeated every quarter unless this quarter shows a meaningful inflection.
+- Treat decks as marketing material by default and actively avoid promotional claims unless backed by hard evidence on the slide.
+- Reject corporate-speak slides (brand messaging, awards, ESG slogans, generic vision statements) unless they contain a clear, investable signal.
 - Ignore cover pages, ESG slogans, awards, org charts, photo-heavy pages with little analytical value.
 - Target at least 3 slides when enough quality material exists; return fewer only if the deck has limited high-signal content.
 - Return at most 10 slides.
@@ -275,6 +277,7 @@ CONTEXT QUALITY RULES
 - Do not narrate obvious visual content that the reader can already see.
 - Do not explain how to read the chart/table.
 - Do not start context with phrases like "In this slide", "This slide shows", or "The slide shows".
+- Each context must be tightly grounded in that exact selected page. Do not mix context across pages.
 - Avoid vague narration; include concrete directionality or mix shift wherever visible (for example, share increase/decrease by segment).
 - If a financial/result slide is selected, explicitly justify why it is included now (what changed beneath headline numbers and why that matters).
 - Write in balanced simple English: plain words first, sharp logic, minimal jargon.
