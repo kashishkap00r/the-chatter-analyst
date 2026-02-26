@@ -69,6 +69,35 @@ const error = (status: number, code: string, message: string, reasonCode?: strin
 const hasNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value.trim().length > 0;
 
+const normalizeNseScrip = (value: unknown): string => {
+  if (!hasNonEmptyString(value)) return "";
+
+  const raw = value.trim().toUpperCase();
+  let candidate = raw;
+
+  if (candidate.includes(":")) {
+    const lastSegment = candidate.split(":").pop();
+    if (lastSegment) {
+      candidate = lastSegment;
+    }
+  }
+
+  candidate = candidate
+    .replace(/^NSE[\s\-_/]*/i, "")
+    .replace(/^BSE[\s\-_/]*/i, "")
+    .replace(/\.NS$/i, "")
+    .replace(/\(NSE\)/i, "")
+    .trim();
+
+  const strict = candidate.replace(/[^A-Z0-9]/g, "");
+  if (strict) return strict;
+
+  const tokenMatches = raw.match(/[A-Z0-9]{2,15}/g) || [];
+  const filtered = tokenMatches.filter((token) => token !== "NSE" && token !== "BSE");
+  if (filtered.length === 0) return "";
+  return filtered[filtered.length - 1];
+};
+
 const extractRetryAfterSeconds = (message: string): number | null => {
   const match = message.match(/retry in\s+([\d.]+)s/i);
   if (!match) return null;
@@ -181,7 +210,6 @@ const validateChatterResult = (result: any): string | null => {
   const requiredRootFields = [
     "companyName",
     "fiscalPeriod",
-    "nseScrip",
     "marketCapCategory",
     "industry",
     "companyDescription",
@@ -192,11 +220,7 @@ const validateChatterResult = (result: any): string | null => {
     }
   }
 
-  const normalizedScrip = result.nseScrip.trim().toUpperCase();
-  if (!/^[A-Z0-9]+$/.test(normalizedScrip)) {
-    return "Field 'nseScrip' must contain only A-Z and 0-9.";
-  }
-  result.nseScrip = normalizedScrip;
+  result.nseScrip = normalizeNseScrip(result.nseScrip);
 
   if (!Array.isArray(result.quotes)) {
     return "Field 'quotes' must be an array.";
