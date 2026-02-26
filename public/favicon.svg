@@ -1,5 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Chatter Analyst">
-  <rect x="4" y="4" width="56" height="56" rx="12" fill="#0f766e" />
+  <defs>
+    <linearGradient id="chatterBrandBlue" x1="6" y1="6" x2="58" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#387ed1" />
+      <stop offset="1" stop-color="#215ea7" />
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="56" height="56" rx="12" fill="url(#chatterBrandBlue)" />
   <text
     x="32"
     y="42"
