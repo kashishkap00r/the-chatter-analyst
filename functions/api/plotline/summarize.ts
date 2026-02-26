@@ -66,11 +66,11 @@ const DEFAULT_PROVIDER = PROVIDER_GEMINI;
 const FLASH_MODEL = "gemini-2.5-flash";
 const FLASH_3_MODEL = "gemini-3-flash-preview";
 const PRO_MODEL = "gemini-3-pro-preview";
-const OPENROUTER_PRIMARY_MODEL = "minimax/minimax-01";
-const OPENROUTER_BACKUP_MODEL = "qwen/qwen3-vl-235b-a22b-instruct";
+const OPENROUTER_PRIMARY_MODEL = "minimax/minimax-m2.5";
+const OPENROUTER_BACKUP_MODEL = "mistralai/mistral-large-2512";
 const DEFAULT_MODEL = FLASH_3_MODEL;
 const ALLOWED_MODELS = new Set([FLASH_MODEL, FLASH_3_MODEL, PRO_MODEL]);
-const OPENROUTER_ALLOWED_MODELS = new Set([OPENROUTER_PRIMARY_MODEL]);
+const OPENROUTER_ALLOWED_MODELS = new Set([OPENROUTER_PRIMARY_MODEL, OPENROUTER_BACKUP_MODEL]);
 
 const json = (payload: unknown, status = 200): Response =>
   new Response(JSON.stringify(payload), {
@@ -115,10 +115,10 @@ const getModelAttemptOrder = (requestedModel: string): string[] => {
 };
 
 const getOpenRouterAttemptOrder = (requestedModel: string): string[] => {
-  if (requestedModel === OPENROUTER_BACKUP_MODEL) {
-    return [OPENROUTER_BACKUP_MODEL, OPENROUTER_PRIMARY_MODEL];
+  if (requestedModel === OPENROUTER_PRIMARY_MODEL) {
+    return [OPENROUTER_PRIMARY_MODEL, OPENROUTER_BACKUP_MODEL];
   }
-  return [OPENROUTER_PRIMARY_MODEL, OPENROUTER_BACKUP_MODEL];
+  return [OPENROUTER_BACKUP_MODEL, OPENROUTER_PRIMARY_MODEL];
 };
 
 const dedupeKeywords = (value: unknown): string[] => {

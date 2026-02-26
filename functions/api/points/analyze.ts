@@ -24,11 +24,11 @@ const DEFAULT_PROVIDER = PROVIDER_GEMINI;
 const FLASH_MODEL = "gemini-2.5-flash";
 const FLASH_3_MODEL = "gemini-3-flash-preview";
 const PRO_MODEL = "gemini-3-pro-preview";
-const OPENROUTER_PRIMARY_MODEL = "minimax/minimax-01";
-const OPENROUTER_BACKUP_MODEL = "qwen/qwen3-vl-235b-a22b-instruct";
+const OPENROUTER_PRIMARY_MODEL = "qwen/qwen2.5-vl-32b-instruct";
+const OPENROUTER_BACKUP_MODEL = "minimax/minimax-01";
 const DEFAULT_MODEL = FLASH_3_MODEL;
 const ALLOWED_MODELS = new Set([FLASH_MODEL, FLASH_3_MODEL, PRO_MODEL]);
-const OPENROUTER_ALLOWED_MODELS = new Set([OPENROUTER_PRIMARY_MODEL]);
+const OPENROUTER_ALLOWED_MODELS = new Set([OPENROUTER_PRIMARY_MODEL, OPENROUTER_BACKUP_MODEL]);
 const IS_STRICT_VALIDATION: boolean = false;
 const UPSTREAM_DEPENDENCY_STATUS = 424;
 const VALIDATION_STATUS = 422;
@@ -195,10 +195,10 @@ const parseProvider = (value: unknown): string => {
 };
 
 const getOpenRouterAttemptOrder = (requestedModel: string): string[] => {
-  if (requestedModel === OPENROUTER_BACKUP_MODEL) {
-    return [OPENROUTER_BACKUP_MODEL, OPENROUTER_PRIMARY_MODEL];
+  if (requestedModel === OPENROUTER_PRIMARY_MODEL) {
+    return [OPENROUTER_PRIMARY_MODEL, OPENROUTER_BACKUP_MODEL];
   }
-  return [OPENROUTER_PRIMARY_MODEL, OPENROUTER_BACKUP_MODEL];
+  return [OPENROUTER_BACKUP_MODEL, OPENROUTER_PRIMARY_MODEL];
 };
 
 const isStructuredOutputError = (message: string): boolean => {

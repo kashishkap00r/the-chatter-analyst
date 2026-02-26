@@ -131,9 +131,34 @@ const GEMINI_MODEL_OPTIONS: Array<{ value: ModelType; label: string }> = [
   { value: ModelType.PRO, label: "Gemini 3 Pro (Deep)" },
 ];
 
-const OPENROUTER_MODEL_OPTIONS: Array<{ value: ModelType; label: string }> = [
+const OPENROUTER_CHATTER_MODEL_OPTIONS: Array<{ value: ModelType; label: string }> = [
+  { value: ModelType.OPENROUTER_DEEPSEEK_V32, label: "DeepSeek V3.2 (OpenRouter)" },
+  { value: ModelType.OPENROUTER_MINIMAX_M21, label: "MiniMax M2.1 (OpenRouter)" },
+];
+
+const OPENROUTER_POINTS_MODEL_OPTIONS: Array<{ value: ModelType; label: string }> = [
+  { value: ModelType.OPENROUTER_QWEN25_VL_32B, label: "Qwen2.5 VL 32B (OpenRouter)" },
   { value: ModelType.OPENROUTER_MINIMAX, label: "MiniMax-01 (OpenRouter)" },
 ];
+
+const OPENROUTER_PLOTLINE_MODEL_OPTIONS: Array<{ value: ModelType; label: string }> = [
+  { value: ModelType.OPENROUTER_MINIMAX_M25, label: "MiniMax M2.5 (OpenRouter)" },
+  { value: ModelType.OPENROUTER_MISTRAL_LARGE_2512, label: "Mistral Large 2512 (OpenRouter)" },
+];
+
+const OPENROUTER_CHATTER_MODEL_VALUES = new Set<ModelType>(
+  OPENROUTER_CHATTER_MODEL_OPTIONS.map((option) => option.value),
+);
+const OPENROUTER_POINTS_MODEL_VALUES = new Set<ModelType>(
+  OPENROUTER_POINTS_MODEL_OPTIONS.map((option) => option.value),
+);
+const OPENROUTER_PLOTLINE_MODEL_VALUES = new Set<ModelType>(
+  OPENROUTER_PLOTLINE_MODEL_OPTIONS.map((option) => option.value),
+);
+
+const OPENROUTER_CHATTER_DEFAULT_MODEL = ModelType.OPENROUTER_DEEPSEEK_V32;
+const OPENROUTER_POINTS_DEFAULT_MODEL = ModelType.OPENROUTER_QWEN25_VL_32B;
+const OPENROUTER_PLOTLINE_DEFAULT_MODEL = ModelType.OPENROUTER_MINIMAX_M25;
 
 const mapPointsProgress = (message: string): ProgressEvent => {
   const convertedMatch = message.match(/Converted page (\d+) of (\d+)/i);
@@ -509,11 +534,11 @@ const App: React.FC = () => {
   const [textInput, setTextInput] = useState('');
   const [provider, setProvider] = useState<ProviderType>(ProviderType.GEMINI);
   const [geminiModel, setGeminiModel] = useState<ModelType>(ModelType.FLASH_3);
-  const [openRouterModel, setOpenRouterModel] = useState<ModelType>(ModelType.OPENROUTER_MINIMAX);
+  const [openRouterModel, setOpenRouterModel] = useState<ModelType>(OPENROUTER_CHATTER_DEFAULT_MODEL);
   const [geminiPointsModel, setGeminiPointsModel] = useState<ModelType>(ModelType.FLASH_3);
-  const [openRouterPointsModel, setOpenRouterPointsModel] = useState<ModelType>(ModelType.OPENROUTER_MINIMAX);
+  const [openRouterPointsModel, setOpenRouterPointsModel] = useState<ModelType>(OPENROUTER_POINTS_DEFAULT_MODEL);
   const [geminiPlotlineModel, setGeminiPlotlineModel] = useState<ModelType>(ModelType.FLASH_3);
-  const [openRouterPlotlineModel, setOpenRouterPlotlineModel] = useState<ModelType>(ModelType.OPENROUTER_MINIMAX);
+  const [openRouterPlotlineModel, setOpenRouterPlotlineModel] = useState<ModelType>(OPENROUTER_PLOTLINE_DEFAULT_MODEL);
 
   const [batchFiles, setBatchFiles] = useState<BatchFile[]>([]);
   const [isAnalyzingBatch, setIsAnalyzingBatch] = useState(false);
@@ -550,7 +575,13 @@ const App: React.FC = () => {
   const selectedChatterModel = provider === ProviderType.GEMINI ? geminiModel : openRouterModel;
   const selectedPointsModel = provider === ProviderType.GEMINI ? geminiPointsModel : openRouterPointsModel;
   const selectedPlotlineModel = provider === ProviderType.GEMINI ? geminiPlotlineModel : openRouterPlotlineModel;
-  const currentModelOptions = provider === ProviderType.GEMINI ? GEMINI_MODEL_OPTIONS : OPENROUTER_MODEL_OPTIONS;
+  const currentOpenRouterModelOptions =
+    appMode === 'chatter'
+      ? OPENROUTER_CHATTER_MODEL_OPTIONS
+      : appMode === 'points'
+        ? OPENROUTER_POINTS_MODEL_OPTIONS
+        : OPENROUTER_PLOTLINE_MODEL_OPTIONS;
+  const currentModelOptions = provider === ProviderType.GEMINI ? GEMINI_MODEL_OPTIONS : currentOpenRouterModelOptions;
 
   const getCompletedChatterResults = useCallback((): ChatterAnalysisResult[] => {
     const results: ChatterAnalysisResult[] = [];
@@ -590,20 +621,36 @@ const App: React.FC = () => {
     if (MODEL_TYPE_VALUES.has(snapshot.geminiModel)) {
       setGeminiModel(snapshot.geminiModel);
     }
-    if (MODEL_TYPE_VALUES.has(snapshot.openRouterModel)) {
-      setOpenRouterModel(snapshot.openRouterModel);
+    if (
+      MODEL_TYPE_VALUES.has(snapshot.openRouterModel) &&
+      OPENROUTER_CHATTER_MODEL_VALUES.has(snapshot.openRouterModel as ModelType)
+    ) {
+      setOpenRouterModel(snapshot.openRouterModel as ModelType);
+    } else {
+      setOpenRouterModel(OPENROUTER_CHATTER_DEFAULT_MODEL);
     }
     if (MODEL_TYPE_VALUES.has(snapshot.geminiPointsModel)) {
       setGeminiPointsModel(snapshot.geminiPointsModel);
     }
-    if (MODEL_TYPE_VALUES.has(snapshot.openRouterPointsModel)) {
-      setOpenRouterPointsModel(snapshot.openRouterPointsModel);
+    if (
+      MODEL_TYPE_VALUES.has(snapshot.openRouterPointsModel) &&
+      OPENROUTER_POINTS_MODEL_VALUES.has(snapshot.openRouterPointsModel as ModelType)
+    ) {
+      setOpenRouterPointsModel(snapshot.openRouterPointsModel as ModelType);
+    } else {
+      setOpenRouterPointsModel(OPENROUTER_POINTS_DEFAULT_MODEL);
     }
     if (snapshot.geminiPlotlineModel && MODEL_TYPE_VALUES.has(snapshot.geminiPlotlineModel)) {
       setGeminiPlotlineModel(snapshot.geminiPlotlineModel);
     }
-    if (snapshot.openRouterPlotlineModel && MODEL_TYPE_VALUES.has(snapshot.openRouterPlotlineModel)) {
-      setOpenRouterPlotlineModel(snapshot.openRouterPlotlineModel);
+    if (
+      snapshot.openRouterPlotlineModel &&
+      MODEL_TYPE_VALUES.has(snapshot.openRouterPlotlineModel) &&
+      OPENROUTER_PLOTLINE_MODEL_VALUES.has(snapshot.openRouterPlotlineModel as ModelType)
+    ) {
+      setOpenRouterPlotlineModel(snapshot.openRouterPlotlineModel as ModelType);
+    } else {
+      setOpenRouterPlotlineModel(OPENROUTER_PLOTLINE_DEFAULT_MODEL);
     }
 
     const restoredBatchFiles = Array.isArray(snapshot.batchFiles)

@@ -252,4 +252,9 @@ export enum ModelType {
   FLASH_3 = 'gemini-3-flash-preview',
   FLASH = 'gemini-2.5-flash',
   OPENROUTER_MINIMAX = 'minimax/minimax-01',
+  OPENROUTER_DEEPSEEK_V32 = 'deepseek/deepseek-v3.2',
+  OPENROUTER_MINIMAX_M21 = 'minimax/minimax-m2.1',
+  OPENROUTER_MINIMAX_M25 = 'minimax/minimax-m2.5',
+  OPENROUTER_MISTRAL_LARGE_2512 = 'mistralai/mistral-large-2512',
+  OPENROUTER_QWEN25_VL_32B = 'qwen/qwen2.5-vl-32b-instruct',
 }
