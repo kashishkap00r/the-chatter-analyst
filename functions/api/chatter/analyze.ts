@@ -5,6 +5,26 @@ import {
   CHATTER_RESPONSE_SCHEMA,
   normalizeGeminiProviderPreference,
 } from "../../_shared/gemini";
+import { parseJsonBodyWithLimit } from "../../_shared/request";
+import { error, json } from "../../_shared/response";
+import {
+  isAllowedProviderModel,
+  parseProvider as parseProviderValue,
+  resolveRequestedModel,
+} from "../../_shared/providerModels";
+import {
+  extractRetryAfterSeconds,
+  getPrimaryBackupAttemptOrder,
+  getPrimarySecondaryTertiaryAttemptOrder,
+  isLocationUnsupportedError,
+  isOverloadError,
+  isSchemaConstraintError,
+  isStructuredOutputError,
+  isTimeoutError,
+  isUpstreamRateLimit as isUpstreamRateLimitBase,
+  isUpstreamTransientError as isUpstreamTransientErrorBase,
+} from "../../_shared/retryPolicy";
+import { hasNonEmptyString } from "../../_shared/validation";
 
 interface Env {
   GEMINI_API_KEY?: string;
@@ -55,20 +75,6 @@ const CATEGORY_NORMALIZATION_RULES: Array<{ match: RegExp; normalized: string }>
   { match: /(competitive|competition|market share|peer)/i, normalized: "Competitive Landscape" },
 ];
 
-const json = (payload: unknown, status = 200): Response =>
-  new Response(JSON.stringify(payload), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-    },
-  });
-
-const error = (status: number, code: string, message: string, reasonCode?: string, details?: unknown): Response =>
-  json({ error: { code, message, reasonCode, details } }, status);
-
-const hasNonEmptyString = (value: unknown): value is string =>
-  typeof value === "string" && value.trim().length > 0;
-
 const normalizeNseScrip = (value: unknown): string => {
   if (!hasNonEmptyString(value)) return "";
 
@@ -98,64 +104,6 @@ const normalizeNseScrip = (value: unknown): string => {
   return filtered[filtered.length - 1];
 };
 
-const extractRetryAfterSeconds = (message: string): number | null => {
-  const match = message.match(/retry in\s+([\d.]+)s/i);
-  if (!match) return null;
-  const parsed = Number(match[1]);
-  if (!Number.isFinite(parsed) || parsed <= 0) return null;
-  return Math.max(1, Math.ceil(parsed));
-};
-
-const isUpstreamRateLimit = (message: string): boolean => {
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("429") ||
-    normalized.includes("quota") ||
-    normalized.includes("rate limit") ||
-    normalized.includes("too many requests") ||
-    normalized.includes("resource exhausted") ||
-    normalized.includes("generate_content_free_tier_requests")
-  );
-};
-
-const isSchemaConstraintError = (message: string): boolean => {
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("too many states") ||
-    normalized.includes("specified schema produces a constraint")
-  );
-};
-
-const isOverloadError = (message: string): boolean => {
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("503") ||
-    normalized.includes("overload") ||
-    normalized.includes("high demand") ||
-    normalized.includes("temporarily unavailable")
-  );
-};
-
-const isTimeoutError = (message: string): boolean => {
-  const normalized = message.toLowerCase();
-  return normalized.includes("timed out") || normalized.includes("timeout");
-};
-
-const isLocationUnsupportedError = (message: string): boolean => {
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("user location is not supported for the api use") ||
-    normalized.includes("location is not supported for the api use")
-  );
-};
-
-const isUpstreamTransientError = (message: string): boolean =>
-  isOverloadError(message) ||
-  isTimeoutError(message) ||
-  message.includes("500") ||
-  message.includes("502") ||
-  message.includes("504");
-
 const normalizeCategory = (rawCategory: string): string => {
   const trimmed = rawCategory.trim();
   if (!trimmed) {
@@ -172,35 +120,19 @@ const normalizeCategory = (rawCategory: string): string => {
   return "Other Material";
 };
 
-const getModelAttemptOrder = (requestedModel: string): string[] => {
-  if (requestedModel === FLASH_MODEL) {
-    return [FLASH_MODEL, FLASH_3_MODEL, PRO_MODEL];
-  }
-  if (requestedModel === FLASH_3_MODEL) {
-    return [FLASH_3_MODEL, FLASH_MODEL, PRO_MODEL];
-  }
-  return [PRO_MODEL, FLASH_3_MODEL, FLASH_MODEL];
-};
+const parseProvider = (value: unknown): ReturnType<typeof parseProviderValue> =>
+  parseProviderValue(value, DEFAULT_PROVIDER);
 
-const parseProvider = (value: unknown): string => {
-  if (typeof value !== "string") return DEFAULT_PROVIDER;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === PROVIDER_GEMINI) return PROVIDER_GEMINI;
-  if (normalized === PROVIDER_OPENROUTER) return PROVIDER_OPENROUTER;
-  return "";
-};
+const getModelAttemptOrder = (requestedModel: string): string[] =>
+  getPrimarySecondaryTertiaryAttemptOrder(requestedModel, FLASH_MODEL, FLASH_3_MODEL, PRO_MODEL);
 
-const getOpenRouterAttemptOrder = (requestedModel: string): string[] => {
-  if (requestedModel === OPENROUTER_PRIMARY_MODEL) {
-    return [OPENROUTER_PRIMARY_MODEL, OPENROUTER_BACKUP_MODEL];
-  }
-  return [OPENROUTER_BACKUP_MODEL, OPENROUTER_PRIMARY_MODEL];
-};
+const getOpenRouterAttemptOrder = (requestedModel: string): string[] =>
+  getPrimaryBackupAttemptOrder(requestedModel, OPENROUTER_PRIMARY_MODEL, OPENROUTER_BACKUP_MODEL);
 
-const isStructuredOutputError = (message: string): boolean => {
-  const normalized = message.toLowerCase();
-  return normalized.includes("invalid json") || normalized.includes("empty response");
-};
+const isUpstreamRateLimit = (message: string): boolean =>
+  isUpstreamRateLimitBase(message, { includeFreeTierRateLimitToken: true });
+
+const isUpstreamTransientError = (message: string): boolean => isUpstreamTransientErrorBase(message);
 
 const validateChatterResult = (result: any): string | null => {
   if (!result || typeof result !== "object") {
@@ -270,17 +202,13 @@ export async function onRequestPost(context: any): Promise<Response> {
   const env = context.env as Env;
   const requestId = request.headers.get("cf-ray") || crypto.randomUUID();
 
-  const contentLength = Number(request.headers.get("content-length") || "0");
-  if (contentLength > MAX_BODY_BYTES) {
-    return error(413, "BAD_REQUEST", "Request body is too large.", "BODY_TOO_LARGE");
+  const parsedBody = await parseJsonBodyWithLimit<any>(request, MAX_BODY_BYTES);
+  if (parsedBody.ok === false) {
+    return parsedBody.reason === "BODY_TOO_LARGE"
+      ? error(413, "BAD_REQUEST", "Request body is too large.", "BODY_TOO_LARGE")
+      : error(400, "BAD_REQUEST", "Request body must be valid JSON.", "INVALID_JSON");
   }
-
-  let body: any;
-  try {
-    body = await request.json();
-  } catch {
-    return error(400, "BAD_REQUEST", "Request body must be valid JSON.", "INVALID_JSON");
-  }
+  const body = parsedBody.body;
 
   const transcript = typeof body?.transcript === "string" ? body.transcript.trim() : "";
   if (!transcript) {
@@ -292,18 +220,15 @@ export async function onRequestPost(context: any): Promise<Response> {
     return error(400, "BAD_REQUEST", "Field 'provider' is invalid.", "INVALID_PROVIDER");
   }
 
-  const model =
-    typeof body?.model === "string" && body.model.trim()
-      ? body.model.trim()
-      : provider === PROVIDER_OPENROUTER
-        ? OPENROUTER_PRIMARY_MODEL
-        : DEFAULT_MODEL;
+  const model = resolveRequestedModel(body?.model, provider, {
+    gemini: DEFAULT_MODEL,
+    openrouter: OPENROUTER_PRIMARY_MODEL,
+  });
 
-  if (provider === PROVIDER_GEMINI && !ALLOWED_MODELS.has(model)) {
-    return error(400, "BAD_REQUEST", "Field 'model' is invalid for provider 'gemini'.", "INVALID_MODEL");
-  }
-  if (provider === PROVIDER_OPENROUTER && !OPENROUTER_ALLOWED_MODELS.has(model)) {
-    return error(400, "BAD_REQUEST", "Field 'model' is invalid for provider 'openrouter'.", "INVALID_MODEL");
+  if (!isAllowedProviderModel(provider, model, { gemini: ALLOWED_MODELS, openrouter: OPENROUTER_ALLOWED_MODELS })) {
+    return provider === PROVIDER_GEMINI
+      ? error(400, "BAD_REQUEST", "Field 'model' is invalid for provider 'gemini'.", "INVALID_MODEL")
+      : error(400, "BAD_REQUEST", "Field 'model' is invalid for provider 'openrouter'.", "INVALID_MODEL");
   }
 
   const primaryApiKey = env?.GEMINI_API_KEY;
