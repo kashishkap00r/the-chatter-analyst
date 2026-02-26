@@ -1,5 +1,4 @@
-import type { PlotlineCompanyResult, PlotlineSummaryResult } from "../types";
-import { buildPlotlineNarrativeFallback } from "./plotlineNarrativeFallback";
+import type { PlotlineSummaryResult, PlotlineStorySection } from "../types";
 
 const FALLBACK_TEXT = "N/A";
 
@@ -19,23 +18,6 @@ const escapeHtml = (value: string): string =>
     .replace(/\"/g, "&quot;")
     .replace(/'/g, "&#39;");
 
-const normalizeScrip = (value: string | undefined): string =>
-  normalizeValue(value, "")
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, "");
-
-const buildCompanyMeta = (company: PlotlineCompanyResult): string => {
-  const marketCap = normalizeValue(company.marketCapCategory);
-  const industry = normalizeValue(company.industry);
-  return `${marketCap} | ${industry}`;
-};
-
-const getZerodhaUrl = (company: PlotlineCompanyResult): string => {
-  const scrip = normalizeScrip(company.nseScrip);
-  if (!scrip) return "";
-  return `https://zerodha.com/markets/stocks/NSE/${encodeURIComponent(scrip)}/`;
-};
-
 const buildSpeakerLine = (name: string, designation: string): string => {
   const normalizedName = normalizeValue(name);
   const normalizedDesignation = normalizeValue(designation);
@@ -43,27 +25,32 @@ const buildSpeakerLine = (name: string, designation: string): string => {
   return `— ${normalizedName}, ${normalizedDesignation}`;
 };
 
-const buildCompanyHtml = (company: PlotlineCompanyResult, fallbackKeywords: string[]): string => {
-  const headingText = escapeHtml(normalizeValue(company.companyName));
-  const companyMeta = escapeHtml(buildCompanyMeta(company));
-  const companyNarrative = escapeHtml(
-    normalizeValue(
-      company.companyNarrative,
-      buildPlotlineNarrativeFallback(company.companyName, company.quotes, fallbackKeywords),
-    ),
-  );
-  const zerodhaUrl = getZerodhaUrl(company);
-  const headingHtml = zerodhaUrl
-    ? `<a href="${escapeHtml(zerodhaUrl)}" style="color:#1155cc;text-decoration:underline;">${headingText}</a>`
-    : headingText;
+const buildStoryHeaderHtml = (summary: PlotlineSummaryResult): string =>
+  [
+    `<section style="font-family:Arial,sans-serif;color:#111827;">`,
+    `<h1 style="font-size:28px;line-height:1.3;font-weight:600;margin:0 0 8px 0;">${escapeHtml(normalizeValue(summary.title, "Plotline"))}</h1>`,
+    `<p style="margin:0;line-height:1.65;color:#4b5563;">${escapeHtml(normalizeValue(summary.dek, ""))}</p>`,
+    `</section>`,
+  ].join("");
 
-  const quotesHtml = company.quotes
+const buildStoryHeaderText = (summary: PlotlineSummaryResult): string =>
+  [normalizeValue(summary.title, "Plotline"), normalizeValue(summary.dek, ""), ""].join("\n");
+
+const buildSectionHtml = (section: PlotlineStorySection, index: number): string => {
+  const paragraphsHtml = section.narrativeParagraphs
+    .map(
+      (paragraph) =>
+        `<p style="margin:0 0 10px 0;line-height:1.7;color:#1f2937;">${escapeHtml(normalizeValue(paragraph, ""))}</p>`,
+    )
+    .join("");
+
+  const quotesHtml = section.quoteBlocks
     .map((quote) => {
-      const quoteText = escapeHtml(normalizeValue(quote.quote));
       const periodLabel = escapeHtml(normalizeValue(quote.periodLabel, "Unknown Period"));
+      const quoteText = escapeHtml(normalizeValue(quote.quote));
       const speakerLine = escapeHtml(buildSpeakerLine(quote.speakerName, quote.speakerDesignation));
       return [
-        `<p style="margin:0 0 8px 0;color:#374151;font-size:12px;">${periodLabel}</p>`,
+        `<p style="margin:0 0 8px 0;color:#4b5563;font-size:12px;">${periodLabel}</p>`,
         `<p style="margin:0 0 8px 36px;line-height:1.6;font-style:italic;">"${quoteText}"</p>`,
         `<p style="margin:0 0 14px 36px;line-height:1.6;font-style:italic;">${speakerLine}</p>`,
       ].join("");
@@ -72,27 +59,28 @@ const buildCompanyHtml = (company: PlotlineCompanyResult, fallbackKeywords: stri
 
   return [
     `<section style="font-family:Arial,sans-serif;color:#111827;">`,
-    `<h2 style="font-size:24px;font-weight:400;margin:0 0 12px 0;">${headingHtml}</h2>`,
-    `<p style="margin:0 0 10px 0;line-height:1.6;color:#4b5563;font-size:13px;">${companyMeta}</p>`,
-    `<p style="margin:0 0 14px 0;line-height:1.6;">${companyNarrative}</p>`,
+    `<p style="margin:0 0 6px 0;color:#6b7280;font-size:12px;text-transform:uppercase;letter-spacing:0.08em;">Section ${index + 1}</p>`,
+    `<h2 style="font-size:24px;font-weight:500;margin:0 0 8px 0;">${escapeHtml(normalizeValue(section.companyName))}</h2>`,
+    `<p style="margin:0 0 14px 0;color:#4b5563;line-height:1.6;">${escapeHtml(normalizeValue(section.subhead, ""))}</p>`,
+    paragraphsHtml,
     quotesHtml,
     `</section>`,
   ].join("");
 };
 
-const buildCompanyText = (company: PlotlineCompanyResult, fallbackKeywords: string[]): string => {
+const buildSectionText = (section: PlotlineStorySection, index: number): string => {
   const lines: string[] = [];
-  lines.push(normalizeValue(company.companyName));
-  lines.push(buildCompanyMeta(company));
-  lines.push(
-    normalizeValue(
-      company.companyNarrative,
-      buildPlotlineNarrativeFallback(company.companyName, company.quotes, fallbackKeywords),
-    ),
-  );
+  lines.push(`Section ${index + 1}`);
+  lines.push(normalizeValue(section.companyName));
+  lines.push(normalizeValue(section.subhead, ""));
   lines.push("");
 
-  for (const quote of company.quotes) {
+  for (const paragraph of section.narrativeParagraphs) {
+    lines.push(normalizeValue(paragraph, ""));
+    lines.push("");
+  }
+
+  for (const quote of section.quoteBlocks) {
     lines.push(normalizeValue(quote.periodLabel, "Unknown Period"));
     lines.push(`    "${normalizeValue(quote.quote)}"`);
     lines.push(`    ${buildSpeakerLine(quote.speakerName, quote.speakerDesignation)}`);
@@ -102,49 +90,59 @@ const buildCompanyText = (company: PlotlineCompanyResult, fallbackKeywords: stri
   return lines.join("\n").trim();
 };
 
-const buildThemeHtml = (summary: PlotlineSummaryResult): string => {
-  if (!Array.isArray(summary.masterThemeBullets) || summary.masterThemeBullets.length === 0) {
+const buildWatchlistHtml = (summary: PlotlineSummaryResult): string => {
+  if (!Array.isArray(summary.closingWatchlist) || summary.closingWatchlist.length === 0) {
     return "";
   }
 
-  const keywordTitle = summary.keywords.length > 0 ? summary.keywords.join(", ") : "Theme";
-  const bulletsHtml = summary.masterThemeBullets
-    .map((bullet) => `<li style="margin:0 0 6px 0;line-height:1.5;">${escapeHtml(bullet)}</li>`)
+  const listItems = summary.closingWatchlist
+    .map((line) => `<li style="margin:0 0 6px 0;line-height:1.6;">${escapeHtml(normalizeValue(line, ""))}</li>`)
     .join("");
 
   return [
     `<section style="font-family:Arial,sans-serif;color:#111827;">`,
-    `<h2 style="font-size:22px;font-weight:600;margin:0 0 10px 0;">Plotline Theme: ${escapeHtml(keywordTitle)}</h2>`,
-    `<ul style="margin:0 0 18px 20px;padding:0;">${bulletsHtml}</ul>`,
+    `<h2 style="font-size:22px;font-weight:600;margin:0 0 10px 0;">What to Watch</h2>`,
+    `<ul style="margin:0 0 4px 20px;padding:0;">${listItems}</ul>`,
     `</section>`,
   ].join("");
 };
 
-const buildThemeText = (summary: PlotlineSummaryResult): string => {
-  if (!Array.isArray(summary.masterThemeBullets) || summary.masterThemeBullets.length === 0) {
+const buildWatchlistText = (summary: PlotlineSummaryResult): string => {
+  if (!Array.isArray(summary.closingWatchlist) || summary.closingWatchlist.length === 0) {
     return "";
   }
-  const keywordTitle = summary.keywords.length > 0 ? summary.keywords.join(", ") : "Theme";
-  const bulletLines = summary.masterThemeBullets.map((bullet) => `- ${bullet}`);
-  return [`Plotline Theme: ${keywordTitle}`, ...bulletLines, ""].join("\n");
+
+  return ["What to Watch", ...summary.closingWatchlist.map((line) => `- ${normalizeValue(line, "")}`), ""].join("\n");
 };
 
 export const buildPlotlineClipboardExport = (
   summary: PlotlineSummaryResult,
 ): { html: string; text: string } => {
-  const companies = Array.isArray(summary.companies)
-    ? summary.companies.filter((company) => company && Array.isArray(company.quotes) && company.quotes.length > 0)
+  const sections = Array.isArray(summary.sections)
+    ? summary.sections.filter(
+        (section) =>
+          section &&
+          Array.isArray(section.narrativeParagraphs) &&
+          section.narrativeParagraphs.length > 0 &&
+          Array.isArray(section.quoteBlocks) &&
+          section.quoteBlocks.length > 0,
+      )
     : [];
 
   const dividerHtml = `<hr style="border:none;border-top:1px solid #9ca3af;margin:24px 0;" />`;
   const dividerText = "\n------------------------------------------------------------\n";
 
-  const htmlParts = [buildThemeHtml(summary), ...companies.map((company) => buildCompanyHtml(company, summary.keywords))].filter(
-    Boolean,
-  );
-  const textParts = [buildThemeText(summary), ...companies.map((company) => buildCompanyText(company, summary.keywords))].filter(
-    Boolean,
-  );
+  const htmlParts = [
+    buildStoryHeaderHtml(summary),
+    ...sections.map((section, index) => buildSectionHtml(section, index)),
+    buildWatchlistHtml(summary),
+  ].filter(Boolean);
+
+  const textParts = [
+    buildStoryHeaderText(summary),
+    ...sections.map((section, index) => buildSectionText(section, index)),
+    buildWatchlistText(summary),
+  ].filter(Boolean);
 
   return {
     html: htmlParts.join(dividerHtml),

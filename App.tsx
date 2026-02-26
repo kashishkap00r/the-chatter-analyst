@@ -8,11 +8,11 @@ import {
   parsePdfToText,
   renderPdfPagesHighQuality,
   summarizePlotlineTheme,
+  writePlotlineStory,
 } from './services/geminiService';
 import {
   ModelType,
   type PlotlineBatchFile,
-  type PlotlineCompanyResult,
   type PlotlineFileResult,
   type PlotlineNarrativeRequestCompany,
   type PlotlineSummaryResult,
@@ -33,7 +33,6 @@ import ThreadComposer from './components/ThreadComposer';
 import { buildChatterClipboardExport } from './utils/chatterCopyExport';
 import { buildPointsClipboardExport } from './utils/pointsCopyExport';
 import { buildPlotlineClipboardExport } from './utils/plotlineCopyExport';
-import { buildPlotlineNarrativeFallback } from './utils/plotlineNarrativeFallback';
 import {
   clearPersistedSession,
   loadPersistedSession,
@@ -385,12 +384,43 @@ const normalizeCompanyKey = (result: {
   return normalizedName || 'unknown-company';
 };
 
-const dedupePlotlineQuotes = (quotes: PlotlineQuoteMatch[]): PlotlineQuoteMatch[] => {
+const hashToBase36 = (value: string): string => {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index++) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+};
+
+const sanitizeQuoteId = (value: string): string =>
+  value
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 120);
+
+const ensurePlotlineQuoteId = (quote: PlotlineQuoteMatch, companyKey: string): string => {
+  if (typeof quote.quoteId === 'string' && quote.quoteId.trim()) {
+    return sanitizeQuoteId(quote.quoteId);
+  }
+
+  const digest = hashToBase36(
+    `${companyKey}|${quote.periodSortKey}|${quote.speakerName}|${quote.speakerDesignation}|${quote.quote}`,
+  );
+  return `${companyKey}-${quote.periodSortKey}-${digest}`.slice(0, 120);
+};
+
+const dedupePlotlineQuotes = (quotes: PlotlineQuoteMatch[], companyKey: string): PlotlineQuoteMatch[] => {
   const unique = new Map<string, PlotlineQuoteMatch>();
   for (const quote of quotes) {
     const key = `${quote.quote.toLowerCase()}|${quote.speakerName.toLowerCase()}|${quote.periodSortKey}`;
     if (!unique.has(key)) {
-      unique.set(key, quote);
+      unique.set(key, {
+        ...quote,
+        quoteId: ensurePlotlineQuoteId(quote, companyKey),
+      });
     }
   }
   return Array.from(unique.values());
@@ -425,7 +455,7 @@ const buildPlotlineCompaniesForNarrative = (
   return Array.from(groupedCompanies.values())
     .map((company) => ({
       ...company,
-      quotes: dedupePlotlineQuotes(company.quotes)
+      quotes: dedupePlotlineQuotes(company.quotes, company.companyKey)
         .sort((left, right) => {
           if (left.periodSortKey !== right.periodSortKey) {
             return left.periodSortKey - right.periodSortKey;
@@ -436,6 +466,31 @@ const buildPlotlineCompaniesForNarrative = (
     }))
     .filter((company) => company.quotes.length > 0)
     .sort((left, right) => left.companyName.localeCompare(right.companyName));
+};
+
+const buildInterimPlotlineSummary = (
+  keywords: string[],
+  companies: PlotlineNarrativeRequestCompany[],
+): PlotlineSummaryResult => {
+  const themeLabel = keywords.length > 0 ? keywords.join(', ') : 'Theme';
+  const sections = companies.map((company) => ({
+    companyKey: company.companyKey,
+    companyName: company.companyName,
+    subhead: `${company.companyName}: evidence snapshot`,
+    narrativeParagraphs: [
+      `Collecting and sequencing management commentary tied to ${themeLabel}. Full narrative will be generated after all files finish.`,
+    ],
+    quoteBlocks: company.quotes.slice(0, 3),
+  }));
+
+  return {
+    keywords: [...keywords],
+    title: `Plotline: ${themeLabel}`,
+    dek: 'Keyword-linked management evidence is being compiled into a story-first brief.',
+    sections,
+    closingWatchlist: [],
+    skippedCompanies: [],
+  };
 };
 
 const formatSavedTimestamp = (timestamp: number): string => {
@@ -601,7 +656,13 @@ const App: React.FC = () => {
     setPlotlineKeywords(Array.from(new Set(restoredKeywords)));
 
     const restoredSummary = snapshot.plotlineSummary;
-    if (restoredSummary && Array.isArray(restoredSummary.companies) && Array.isArray(restoredSummary.keywords)) {
+    if (
+      restoredSummary &&
+      Array.isArray(restoredSummary.sections) &&
+      Array.isArray(restoredSummary.keywords) &&
+      typeof restoredSummary.title === 'string' &&
+      typeof restoredSummary.dek === 'string'
+    ) {
       setPlotlineSummary(restoredSummary);
     } else {
       setPlotlineSummary(null);
@@ -1507,7 +1568,7 @@ const App: React.FC = () => {
   }, [getCompletedPointsResults]);
 
   const handleCopyAllPlotline = useCallback(async () => {
-    if (!plotlineSummary || plotlineSummary.companies.length === 0) return;
+    if (!plotlineSummary || plotlineSummary.sections.length === 0) return;
 
     const { html, text } = buildPlotlineClipboardExport(plotlineSummary);
     const clipboard = navigator?.clipboard;
@@ -1790,7 +1851,7 @@ const App: React.FC = () => {
           message:
             completedQueueItems < pendingIndexes.length
               ? 'Loading next transcript...'
-              : 'Building company-level Plotline synthesis...',
+              : 'Preparing Plotline story plan...',
           percent: Math.round((completedQueueItems / pendingIndexes.length) * 92),
         },
       });
@@ -1801,22 +1862,7 @@ const App: React.FC = () => {
       const incrementalCompaniesForNarrative = buildPlotlineCompaniesForNarrative(incrementalResultFiles);
 
       if (incrementalCompaniesForNarrative.length > 0) {
-        setPlotlineSummary((previous) => {
-          const previousNarratives = new Map(
-            (previous?.companies || []).map((company) => [company.companyKey, company.companyNarrative]),
-          );
-          const companies = incrementalCompaniesForNarrative.map((company) => ({
-            ...company,
-            companyNarrative:
-              previousNarratives.get(company.companyKey) ||
-              buildPlotlineNarrativeFallback(company.companyName, company.quotes, plotlineKeywords),
-          }));
-          return {
-            keywords: [...plotlineKeywords],
-            companies,
-            masterThemeBullets: [],
-          };
-        });
+        setPlotlineSummary(buildInterimPlotlineSummary(plotlineKeywords, incrementalCompaniesForNarrative));
       }
     }
 
@@ -1826,10 +1872,14 @@ const App: React.FC = () => {
     const companiesForNarrative = buildPlotlineCompaniesForNarrative(resultFiles);
 
     if (companiesForNarrative.length === 0) {
+      const keywordLabel = plotlineKeywords.length > 0 ? plotlineKeywords.join(', ') : 'Theme';
       setPlotlineSummary({
         keywords: [...plotlineKeywords],
-        companies: [],
-        masterThemeBullets: [],
+        title: `Plotline: ${keywordLabel}`,
+        dek: 'No keyword-linked management commentary was found across the uploaded transcripts.',
+        sections: [],
+        closingWatchlist: [],
+        skippedCompanies: [],
       });
       setPlotlineBatchProgress({
         total: pendingIndexes.length,
@@ -1853,33 +1903,39 @@ const App: React.FC = () => {
         currentLabel: undefined,
         progress: {
           stage: 'finalizing',
-          message: 'Generating company narratives and master theme bullets...',
-          percent: 97,
+          message: 'Planning Plotline story structure...',
+          percent: 95,
         },
       }));
 
-      const narrativeResult = await summarizePlotlineTheme(
+      const storyPlan = await summarizePlotlineTheme(
         plotlineKeywords,
         companiesForNarrative,
         provider,
         selectedPlotlineModel,
       );
-      const narrativeMap = new Map(
-        narrativeResult.companyNarratives.map((item) => [item.companyKey, item.narrative]),
-      );
 
-      const companies: PlotlineCompanyResult[] = companiesForNarrative.map((company) => ({
-        ...company,
-        companyNarrative:
-          narrativeMap.get(company.companyKey) ||
-          buildPlotlineNarrativeFallback(company.companyName, company.quotes, plotlineKeywords),
+      setPlotlineBatchProgress((prev) => ({
+        total: prev?.total ?? pendingIndexes.length,
+        completed: prev?.completed ?? pendingIndexes.length,
+        failed: prev?.failed ?? 0,
+        currentLabel: undefined,
+        progress: {
+          stage: 'finalizing',
+          message: 'Writing integrated Plotline story...',
+          percent: 98,
+        },
       }));
 
-      setPlotlineSummary({
-        keywords: [...plotlineKeywords],
-        companies,
-        masterThemeBullets: narrativeResult.masterThemeBullets,
-      });
+      const story = await writePlotlineStory(
+        plotlineKeywords,
+        companiesForNarrative,
+        storyPlan,
+        provider,
+        selectedPlotlineModel,
+      );
+
+      setPlotlineSummary(story);
       setPlotlineBatchProgress((prev) => ({
         total: prev?.total ?? pendingIndexes.length,
         completed: prev?.completed ?? pendingIndexes.length,
@@ -1892,15 +1948,7 @@ const App: React.FC = () => {
         },
       }));
     } catch (error: any) {
-      const companies: PlotlineCompanyResult[] = companiesForNarrative.map((company) => ({
-        ...company,
-        companyNarrative: buildPlotlineNarrativeFallback(company.companyName, company.quotes, plotlineKeywords),
-      }));
-      setPlotlineSummary({
-        keywords: [...plotlineKeywords],
-        companies,
-        masterThemeBullets: [],
-      });
+      setPlotlineSummary(buildInterimPlotlineSummary(plotlineKeywords, companiesForNarrative));
       setPlotlineBatchProgress((prev) => ({
         total: prev?.total ?? pendingIndexes.length,
         completed: prev?.completed ?? pendingIndexes.length,
@@ -2016,7 +2064,7 @@ const App: React.FC = () => {
   const completedPointsResults = getCompletedPointsResults();
   const pointsReadyCount = pointsBatchFiles.filter((file) => file.status === 'ready').length;
   const plotlineReadyCount = plotlineBatchFiles.filter((file) => file.status === 'ready').length;
-  const plotlineCompanyCount = plotlineSummary?.companies.length ?? 0;
+  const plotlineCompanyCount = plotlineSummary?.sections.length ?? 0;
   const isTextLoading = chatterSingleState.status === 'analyzing';
   const isChatterLoading = isTextLoading || isAnalyzingBatch;
   const isPointsLoading = isAnalyzingPointsBatch;
@@ -2601,7 +2649,7 @@ const App: React.FC = () => {
       {plotlineCompanyCount > 0 && (
         <div className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <p className="text-sm text-stone">
-            {plotlineCompanyCount} compan{plotlineCompanyCount === 1 ? 'y' : 'ies'} with keyword matches ready for Plotline export.
+            {plotlineCompanyCount} compan{plotlineCompanyCount === 1 ? 'y' : 'ies'} included in the current Plotline story.
           </p>
           <button
             onClick={handleCopyAllPlotline}
@@ -2638,7 +2686,7 @@ const App: React.FC = () => {
         </>
       )}
 
-      {!isPlotlineLoading && plotlineSummary && plotlineSummary.companies.length === 0 && (
+      {!isPlotlineLoading && plotlineSummary && plotlineSummary.sections.length === 0 && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
           No keyword matches were found across the uploaded transcripts. Try broader or alternate keywords.
         </div>
@@ -2653,38 +2701,38 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {plotlineSummary && plotlineSummary.masterThemeBullets.length > 0 && (
+      {plotlineSummary && (
         <div className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-5 sm:p-6">
-          <h3 className="font-serif text-2xl text-ink">Master Theme Summary</h3>
-          <ul className="mt-4 space-y-2 list-disc pl-5 text-sm text-stone leading-relaxed">
-            {plotlineSummary.masterThemeBullets.map((bullet, index) => (
-              <li key={`plotline-bullet-${index}`}>{bullet}</li>
-            ))}
-          </ul>
+          <h3 className="font-serif text-2xl text-ink">{plotlineSummary.title}</h3>
+          <p className="mt-2 text-sm text-stone leading-relaxed">{plotlineSummary.dek}</p>
         </div>
       )}
 
-      {plotlineSummary?.companies.map((company) => {
-        const narrativeText =
-          company.companyNarrative ||
-          buildPlotlineNarrativeFallback(company.companyName, company.quotes, plotlineSummary.keywords);
-
+      {plotlineSummary?.sections.map((section, index) => {
         return (
-          <div key={company.companyKey} className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-5 sm:p-6 space-y-5">
+          <div key={section.companyKey} className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-5 sm:p-6 space-y-5">
             <header>
-              <h2 className="font-serif text-3xl text-ink">{company.companyName}</h2>
-              <p className="text-sm text-stone">
-                {company.marketCapCategory} | {company.industry}
+              <p className="text-xs font-semibold uppercase tracking-[0.09em] text-stone">
+                Section {index + 1}
               </p>
+              <h2 className="font-serif text-3xl text-ink">{section.companyName}</h2>
+              <p className="text-sm text-stone">{section.subhead}</p>
             </header>
 
-            <p className="rounded-xl border border-brand/20 bg-brand-soft/60 px-4 py-3 text-sm leading-relaxed text-ink">
-              {narrativeText}
-            </p>
+            <div className="space-y-3">
+              {section.narrativeParagraphs.map((paragraph, paragraphIndex) => (
+                <p
+                  key={`${section.companyKey}-paragraph-${paragraphIndex}`}
+                  className="rounded-xl border border-brand/20 bg-brand-soft/60 px-4 py-3 text-sm leading-relaxed text-ink"
+                >
+                  {paragraph}
+                </p>
+              ))}
+            </div>
 
             <div className="space-y-4">
-              {company.quotes.map((quote, index) => (
-                <article key={`${company.companyKey}-${index}`} className="rounded-xl border border-line bg-canvas/45 px-4 py-4">
+              {section.quoteBlocks.map((quote, quoteIndex) => (
+                <article key={`${section.companyKey}-${quoteIndex}`} className="rounded-xl border border-line bg-canvas/45 px-4 py-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.08em] text-stone">
                     {quote.periodLabel}
                   </p>
@@ -2700,6 +2748,23 @@ const App: React.FC = () => {
           </div>
         );
       })}
+
+      {plotlineSummary && plotlineSummary.closingWatchlist.length > 0 && (
+        <div className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-5 sm:p-6">
+          <h3 className="font-serif text-2xl text-ink">What To Watch</h3>
+          <ul className="mt-4 space-y-2 list-disc pl-5 text-sm text-stone leading-relaxed">
+            {plotlineSummary.closingWatchlist.map((line, index) => (
+              <li key={`plotline-watch-${index}`}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {plotlineSummary && plotlineSummary.skippedCompanies.length > 0 && (
+        <div className="rounded-xl border border-line bg-white/70 px-4 py-3 text-xs text-stone">
+          Skipped for weak evidence: {plotlineSummary.skippedCompanies.join(', ')}
+        </div>
+      )}
     </section>
   );
 

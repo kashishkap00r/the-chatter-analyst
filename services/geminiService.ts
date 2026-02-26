@@ -3,7 +3,8 @@ import {
   ModelType,
   PlotlineFileResult,
   PlotlineNarrativeRequestCompany,
-  PlotlineNarrativeResult,
+  PlotlineStoryPlanResult,
+  PlotlineSummaryResult,
   PointsAndFiguresResult,
   ProgressEvent,
   ProviderType,
@@ -18,6 +19,7 @@ const CHATTER_ANALYZE_ENDPOINT = "/api/chatter/analyze";
 const POINTS_ANALYZE_ENDPOINT = "/api/points/analyze";
 const PLOTLINE_ANALYZE_ENDPOINT = "/api/plotline/analyze";
 const PLOTLINE_SUMMARIZE_ENDPOINT = "/api/plotline/summarize";
+const PLOTLINE_WRITE_ENDPOINT = "/api/plotline/write";
 const CHATTER_THREAD_INGEST_ENDPOINT = "/api/chatter/thread/ingest";
 const CHATTER_THREAD_GENERATE_ENDPOINT = "/api/chatter/thread/generate";
 const CHATTER_THREAD_REGENERATE_ENDPOINT = "/api/chatter/thread/regenerate";
@@ -75,6 +77,41 @@ interface PlotlineAnalyzeApiResult {
     periodLabel: string;
     periodSortKey: number;
   }>;
+}
+
+interface PlotlinePlanApiResult {
+  title: string;
+  dek: string;
+  sectionPlans: Array<{
+    companyKey: string;
+    subhead: string;
+    narrativeAngle: string;
+    chronologyMode: "timeline" | "same_period";
+    quoteIds: string[];
+  }>;
+  skippedCompanyKeys: string[];
+}
+
+interface PlotlineStoryApiResult {
+  title: string;
+  dek: string;
+  sections: Array<{
+    companyKey: string;
+    companyName: string;
+    subhead: string;
+    narrativeParagraphs: string[];
+    quoteBlocks: Array<{
+      quoteId: string;
+      quote: string;
+      speakerName: string;
+      speakerDesignation: string;
+      matchedKeywords: string[];
+      periodLabel: string;
+      periodSortKey: number;
+    }>;
+  }>;
+  closingWatchlist: string[];
+  skippedCompanies: string[];
 }
 
 interface PdfImageConversionOptions {
@@ -503,7 +540,7 @@ export const summarizePlotlineTheme = async (
   companies: PlotlineNarrativeRequestCompany[],
   provider: ProviderType = ProviderType.GEMINI,
   modelId: ModelType = ModelType.FLASH_3,
-): Promise<PlotlineNarrativeResult> => {
+): Promise<PlotlineStoryPlanResult> => {
   if (!Array.isArray(keywords) || keywords.length === 0) {
     throw new Error("At least one keyword is required.");
   }
@@ -511,18 +548,68 @@ export const summarizePlotlineTheme = async (
     throw new Error("At least one company is required for Plotline summary.");
   }
 
-  const result = await postJson<PlotlineNarrativeResult>(PLOTLINE_SUMMARIZE_ENDPOINT, {
+  const result = await postJson<PlotlinePlanApiResult>(PLOTLINE_SUMMARIZE_ENDPOINT, {
     provider,
     model: modelId,
     keywords,
     companies,
   });
 
-  if (!Array.isArray(result?.companyNarratives) || !Array.isArray(result?.masterThemeBullets)) {
-    throw new Error("Plotline summary returned an invalid payload.");
+  if (!Array.isArray(result?.sectionPlans) || !Array.isArray(result?.skippedCompanyKeys)) {
+    throw new Error("Plotline planner returned an invalid payload.");
   }
 
-  return result;
+  return {
+    title: result.title,
+    dek: result.dek,
+    sectionPlans: result.sectionPlans,
+    skippedCompanyKeys: result.skippedCompanyKeys,
+  };
+};
+
+export const writePlotlineStory = async (
+  keywords: string[],
+  companies: PlotlineNarrativeRequestCompany[],
+  plan: PlotlineStoryPlanResult,
+  provider: ProviderType = ProviderType.GEMINI,
+  modelId: ModelType = ModelType.FLASH_3,
+): Promise<PlotlineSummaryResult> => {
+  if (!Array.isArray(keywords) || keywords.length === 0) {
+    throw new Error("At least one keyword is required.");
+  }
+  if (!Array.isArray(companies) || companies.length === 0) {
+    throw new Error("At least one company is required for Plotline story.");
+  }
+  if (!plan || !Array.isArray(plan.sectionPlans)) {
+    throw new Error("Plotline plan is required before writing.");
+  }
+
+  const result = await postJson<PlotlineStoryApiResult>(PLOTLINE_WRITE_ENDPOINT, {
+    provider,
+    model: modelId,
+    keywords,
+    companies,
+    plan,
+  });
+
+  if (!Array.isArray(result?.sections) || !Array.isArray(result?.closingWatchlist)) {
+    throw new Error("Plotline writer returned an invalid payload.");
+  }
+
+  return {
+    keywords: [...keywords],
+    title: result.title,
+    dek: result.dek,
+    sections: result.sections.map((section) => ({
+      companyKey: section.companyKey,
+      companyName: section.companyName,
+      subhead: section.subhead,
+      narrativeParagraphs: section.narrativeParagraphs,
+      quoteBlocks: section.quoteBlocks,
+    })),
+    closingWatchlist: result.closingWatchlist,
+    skippedCompanies: Array.isArray(result.skippedCompanies) ? result.skippedCompanies : [],
+  };
 };
 
 // --- "Points & Figures" Analysis ---

@@ -172,26 +172,66 @@ export const PLOTLINE_EXTRACT_RESPONSE_SCHEMA = {
   ],
 };
 
-export const PLOTLINE_SUMMARIZE_RESPONSE_SCHEMA = {
+export const PLOTLINE_PLAN_RESPONSE_SCHEMA = {
   type: "OBJECT",
   properties: {
-    companyNarratives: {
+    title: { type: "STRING" },
+    dek: { type: "STRING" },
+    sectionPlans: {
       type: "ARRAY",
       items: {
         type: "OBJECT",
         properties: {
           companyKey: { type: "STRING" },
-          narrative: { type: "STRING" },
+          subhead: { type: "STRING" },
+          narrativeAngle: { type: "STRING" },
+          chronologyMode: { type: "STRING" },
+          quoteIds: {
+            type: "ARRAY",
+            items: { type: "STRING" },
+          },
         },
-        required: ["companyKey", "narrative"],
+        required: ["companyKey", "subhead", "narrativeAngle", "chronologyMode", "quoteIds"],
       },
     },
-    masterThemeBullets: {
+    skippedCompanyKeys: {
       type: "ARRAY",
       items: { type: "STRING" },
     },
   },
-  required: ["companyNarratives", "masterThemeBullets"],
+  required: ["title", "dek", "sectionPlans", "skippedCompanyKeys"],
+};
+
+export const PLOTLINE_WRITE_RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    title: { type: "STRING" },
+    dek: { type: "STRING" },
+    sections: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          companyKey: { type: "STRING" },
+          subhead: { type: "STRING" },
+          narrativeParagraphs: {
+            type: "ARRAY",
+            items: { type: "STRING" },
+          },
+          quoteIds: {
+            type: "ARRAY",
+            items: { type: "STRING" },
+          },
+        },
+        required: ["companyKey", "subhead", "narrativeParagraphs", "quoteIds"],
+      },
+    },
+    closingWatchlist: {
+      type: "ARRAY",
+      items: { type: "STRING" },
+    },
+  },
+  required: ["title", "dek", "sections", "closingWatchlist"],
 };
 
 export const CHATTER_PROMPT = `
@@ -420,25 +460,63 @@ OUTPUT
 - quotes should include only keyword-matching management remarks.
 `.trim();
 
-export const PLOTLINE_SUMMARIZE_PROMPT = `
+export const PLOTLINE_PLAN_PROMPT = `
 ROLE
-You are writing Plotline synthesis from extracted management quotes.
+You are the Plotline story planner for a Daily Brief-style long-form narrative.
 
 GOAL
-- For each company, write one simple narrative paragraph (4-6 sentences) that explains what the chronological quotes mean collectively.
-- Then write master theme bullets across all companies for the keyword edition.
+- Build a master story-first plan from company quote evidence.
+- The final story rotates company-by-company, not as a quote list.
 
-STYLE
-- Simple English. No dense jargon.
-- Narrative should explain strategic direction, not repeat each quote verbatim.
-- Keep company narratives practical and easy to understand.
-- Master bullets should be executive-style and cross-company.
+EDITORIAL RULES
+- Prioritize strongest narrative signal first (not alphabetical).
+- Weak-evidence companies should be skipped.
+- For each included company, choose 2-3 quoteIds that best support the section's narrative angle.
+- Chronology mode:
+  - Use "timeline" when company evidence spans multiple periods.
+  - Use "same_period" when evidence is primarily from one period.
+- Use soft, readable subheads.
+- Use plain, sharp language; avoid corporate-speak.
 
 OUTPUT RULES
 - Return strict JSON only with:
-  1) companyNarratives: [{ companyKey, narrative }]
-  2) masterThemeBullets: string[]
-- masterThemeBullets target: 5 to 8 bullets.
+  1) title: string
+  2) dek: string
+  3) sectionPlans: [{ companyKey, subhead, narrativeAngle, chronologyMode, quoteIds }]
+  4) skippedCompanyKeys: string[]
+- Do not include company keys that are not in input.
+- Do not include quoteIds that are not in input.
+`.trim();
+
+export const PLOTLINE_WRITE_PROMPT = `
+ROLE
+You are writing a publish-ready Plotline story in Daily Brief style using a pre-approved section plan.
+
+GOAL
+- Write one integrated story with company-by-company sections.
+- Narrative first, with quote evidence woven in.
+
+STYLE RULES
+- Simple, clear English. Avoid dense jargon.
+- Explain why each quote matters strategically.
+- Do not repeat the same point in different words.
+- Keep each section practical and analytical.
+
+SECTION RULES
+- Each section should include 2-4 short narrative paragraphs.
+- Use provided quoteIds only.
+- Ensure narrative aligns with section subhead and narrativeAngle.
+
+ENDING RULES
+- Add a forward-looking close with 3-5 "what to watch" lines.
+
+OUTPUT RULES
+- Return strict JSON only with:
+  1) title: string
+  2) dek: string
+  3) sections: [{ companyKey, subhead, narrativeParagraphs: string[], quoteIds: string[] }]
+  4) closingWatchlist: string[]
+- Do not include unknown company keys or quoteIds.
 `.trim();
 
 const parseGeminiText = (payload: any): string => {

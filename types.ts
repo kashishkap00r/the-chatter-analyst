@@ -147,6 +147,7 @@ export interface PointsAnalysisState {
 // --- "Plotline" Types ---
 
 export interface PlotlineQuoteMatch {
+  quoteId?: string;
   quote: string;
   speakerName: string;
   speakerDesignation: string;
@@ -184,13 +185,38 @@ export interface PlotlineCompanyResult {
   industry: string;
   companyDescription: string;
   quotes: PlotlineQuoteMatch[];
-  companyNarrative: string;
+}
+
+export interface PlotlineStoryPlanSection {
+  companyKey: string;
+  subhead: string;
+  narrativeAngle: string;
+  chronologyMode: 'timeline' | 'same_period';
+  quoteIds: string[];
+}
+
+export interface PlotlineStoryPlanResult {
+  title: string;
+  dek: string;
+  sectionPlans: PlotlineStoryPlanSection[];
+  skippedCompanyKeys: string[];
+}
+
+export interface PlotlineStorySection {
+  companyKey: string;
+  companyName: string;
+  subhead: string;
+  narrativeParagraphs: string[];
+  quoteBlocks: PlotlineQuoteMatch[];
 }
 
 export interface PlotlineSummaryResult {
   keywords: string[];
-  companies: PlotlineCompanyResult[];
-  masterThemeBullets: string[];
+  title: string;
+  dek: string;
+  sections: PlotlineStorySection[];
+  closingWatchlist: string[];
+  skippedCompanies: string[];
 }
 
 export interface PlotlineNarrativeRequestCompany {
@@ -204,11 +230,13 @@ export interface PlotlineNarrativeRequestCompany {
 }
 
 export interface PlotlineNarrativeResult {
-  companyNarratives: Array<{
+  sections: Array<{
     companyKey: string;
-    narrative: string;
+    subhead: string;
+    narrativeParagraphs: string[];
+    quoteIds: string[];
   }>;
-  masterThemeBullets: string[];
+  closingWatchlist: string[];
 }
 
 
