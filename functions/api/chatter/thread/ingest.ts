@@ -32,6 +32,10 @@ interface ThreadEditionSource {
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 const MAX_REMOTE_HTML_BYTES = 6 * 1024 * 1024;
 const MAX_EDITION_TEXT_CHARS = 2_000_000;
+const MAX_REDIRECT_HOPS = 6;
+const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
+const ALLOWED_EXACT_HOSTS = new Set(["thechatter.zerodha.com"]);
+const ALLOWED_SUBSTACK_SUFFIX = ".substack.com";
 
 const json = (payload: unknown, status = 200): Response =>
   new Response(JSON.stringify(payload), {
@@ -54,6 +58,157 @@ const isHttpUrl = (value: string): boolean => {
   } catch {
     return false;
   }
+};
+
+const normalizeHostname = (value: string): string => value.trim().toLowerCase().replace(/\.$/, "");
+const stripIpv6Brackets = (value: string): string =>
+  value.startsWith("[") && value.endsWith("]") ? value.slice(1, -1) : value;
+
+const parseIpv4Octets = (value: string): number[] | null => {
+  const parts = value.split(".");
+  if (parts.length !== 4) return null;
+
+  const octets: number[] = [];
+  for (const part of parts) {
+    if (!/^\d+$/.test(part)) return null;
+    if (part.length > 1 && part.startsWith("0")) return null;
+    const octet = Number(part);
+    if (!Number.isInteger(octet) || octet < 0 || octet > 255) return null;
+    octets.push(octet);
+  }
+  return octets;
+};
+
+const isPrivateOrReservedIpv4 = (octets: number[]): boolean => {
+  const [a, b, c] = octets;
+  if (a === 0 || a === 10 || a === 127) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  if (a === 198 && (b === 18 || b === 19)) return true;
+  if (a === 192 && b === 0 && c === 0) return true;
+  if (a === 192 && b === 0 && c === 2) return true;
+  if (a === 198 && b === 51 && c === 100) return true;
+  if (a === 203 && b === 0 && c === 113) return true;
+  if (a >= 224) return true;
+  return false;
+};
+
+const parseIpv6Hextets = (value: string): number[] | null => {
+  let input = value.toLowerCase();
+  const zoneIndex = input.indexOf("%");
+  if (zoneIndex >= 0) {
+    input = input.slice(0, zoneIndex);
+  }
+
+  if (!input) return null;
+  const hasCompression = input.includes("::");
+  if (hasCompression && input.indexOf("::") !== input.lastIndexOf("::")) return null;
+
+  if (input.includes(".")) {
+    const lastColonIndex = input.lastIndexOf(":");
+    if (lastColonIndex < 0) return null;
+    const ipv4Tail = parseIpv4Octets(input.slice(lastColonIndex + 1));
+    if (!ipv4Tail) return null;
+
+    const high = ((ipv4Tail[0] << 8) | ipv4Tail[1]).toString(16);
+    const low = ((ipv4Tail[2] << 8) | ipv4Tail[3]).toString(16);
+    input = `${input.slice(0, lastColonIndex)}:${high}:${low}`;
+  }
+
+  const [leftRaw, rightRaw = ""] = input.split("::");
+  const leftParts = leftRaw ? leftRaw.split(":").filter((part) => part.length > 0) : [];
+  const rightParts = hasCompression ? (rightRaw ? rightRaw.split(":").filter((part) => part.length > 0) : []) : [];
+
+  const parts = hasCompression
+    ? [
+        ...leftParts,
+        ...Array(Math.max(0, 8 - leftParts.length - rightParts.length)).fill("0"),
+        ...rightParts,
+      ]
+    : leftParts;
+
+  if (parts.length !== 8) return null;
+
+  const hextets: number[] = [];
+  for (const part of parts) {
+    if (!/^[0-9a-f]{1,4}$/.test(part)) return null;
+    hextets.push(Number.parseInt(part, 16));
+  }
+  return hextets;
+};
+
+const isPrivateOrReservedIpv6 = (hextets: number[]): boolean => {
+  if (hextets.every((segment) => segment === 0)) return true;
+  if (hextets.slice(0, 7).every((segment) => segment === 0) && hextets[7] === 1) return true;
+
+  const first = hextets[0];
+  if ((first & 0xfe00) === 0xfc00) return true;
+  if ((first & 0xffc0) === 0xfe80) return true;
+  if ((first & 0xff00) === 0xff00) return true;
+  if (first === 0x2001 && hextets[1] === 0x0db8) return true;
+
+  const isIpv4Mapped =
+    hextets[0] === 0 &&
+    hextets[1] === 0 &&
+    hextets[2] === 0 &&
+    hextets[3] === 0 &&
+    hextets[4] === 0 &&
+    hextets[5] === 0xffff;
+
+  if (isIpv4Mapped) {
+    const mappedIpv4 = [
+      hextets[6] >>> 8,
+      hextets[6] & 0xff,
+      hextets[7] >>> 8,
+      hextets[7] & 0xff,
+    ];
+    if (isPrivateOrReservedIpv4(mappedIpv4)) return true;
+  }
+
+  return false;
+};
+
+const isPrivateOrReservedHostname = (hostname: string): boolean => {
+  const normalized = stripIpv6Brackets(normalizeHostname(hostname));
+  if (!normalized) return true;
+  if (normalized === "localhost" || normalized.endsWith(".localhost") || normalized.endsWith(".local")) return true;
+
+  const ipv4 = parseIpv4Octets(normalized);
+  if (ipv4) return isPrivateOrReservedIpv4(ipv4);
+
+  const ipv6 = parseIpv6Hextets(normalized);
+  if (ipv6) return isPrivateOrReservedIpv6(ipv6);
+
+  return false;
+};
+
+const isAllowedIngestHostname = (hostname: string): boolean => {
+  const normalized = normalizeHostname(hostname);
+  if (ALLOWED_EXACT_HOSTS.has(normalized)) return true;
+  return normalized.endsWith(ALLOWED_SUBSTACK_SUFFIX) && normalized.length > ALLOWED_SUBSTACK_SUFFIX.length;
+};
+
+const getUrlRestrictionReason = (targetUrl: URL): string | null => {
+  if (targetUrl.protocol !== "http:" && targetUrl.protocol !== "https:") {
+    return "Only HTTP(S) URLs are allowed.";
+  }
+
+  const host = normalizeHostname(targetUrl.hostname);
+  if (!host) {
+    return "URL host is missing.";
+  }
+
+  if (isPrivateOrReservedHostname(host)) {
+    return "URL targets a private or reserved network address, which is not allowed.";
+  }
+
+  if (!isAllowedIngestHostname(host)) {
+    return "URL host is not allowed. Use a *.substack.com or thechatter.zerodha.com URL.";
+  }
+
+  return null;
 };
 
 const decodeHtmlEntities = (value: string): string =>
@@ -390,34 +545,63 @@ const fetchTextFromUrl = async (substackUrl: string): Promise<string> => {
   const timeout = setTimeout(() => controller.abort("timeout"), 20_000);
 
   try {
-    const response = await fetch(substackUrl, {
-      method: "GET",
-      redirect: "follow",
-      headers: {
-        "user-agent": "Mozilla/5.0 (compatible; ChatterAnalystBot/1.0)",
-        accept: "text/html,application/xhtml+xml",
-      },
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`Unable to fetch URL. Status ${response.status}.`);
+    let currentUrl = new URL(substackUrl);
+    const initialRestriction = getUrlRestrictionReason(currentUrl);
+    if (initialRestriction) {
+      throw new Error(initialRestriction);
     }
 
-    const html = await response.text();
-    if (!html.trim()) {
-      throw new Error("Fetched page is empty.");
+    for (let redirectHop = 0; redirectHop <= MAX_REDIRECT_HOPS; redirectHop++) {
+      const response = await fetch(currentUrl.toString(), {
+        method: "GET",
+        redirect: "manual",
+        headers: {
+          "user-agent": "Mozilla/5.0 (compatible; ChatterAnalystBot/1.0)",
+          accept: "text/html,application/xhtml+xml",
+        },
+        signal: controller.signal,
+      });
+
+      if (REDIRECT_STATUS_CODES.has(response.status)) {
+        const location = response.headers.get("location");
+        if (!location) {
+          throw new Error("Received redirect response without a location header.");
+        }
+        if (redirectHop >= MAX_REDIRECT_HOPS) {
+          throw new Error("Too many redirects while fetching URL.");
+        }
+
+        const nextUrl = new URL(location, currentUrl);
+        const restriction = getUrlRestrictionReason(nextUrl);
+        if (restriction) {
+          throw new Error(`Redirect target blocked: ${restriction}`);
+        }
+
+        currentUrl = nextUrl;
+        continue;
+      }
+
+      if (!response.ok) {
+        throw new Error(`Unable to fetch URL. Status ${response.status}.`);
+      }
+
+      const html = await response.text();
+      if (!html.trim()) {
+        throw new Error("Fetched page is empty.");
+      }
+
+      if (html.length > MAX_REMOTE_HTML_BYTES) {
+        throw new Error("Fetched page is too large to process.");
+      }
+
+      const articleMatch = html.match(/<article\b[^>]*>[\s\S]*?<\/article>/i);
+      const embeddedBodyHtml = extractEmbeddedBodyHtml(html);
+
+      const candidate = articleMatch?.[0] || embeddedBodyHtml || html;
+      return convertHtmlToPlainText(candidate);
     }
 
-    if (html.length > MAX_REMOTE_HTML_BYTES) {
-      throw new Error("Fetched page is too large to process.");
-    }
-
-    const articleMatch = html.match(/<article\b[^>]*>[\s\S]*?<\/article>/i);
-    const embeddedBodyHtml = extractEmbeddedBodyHtml(html);
-
-    const candidate = articleMatch?.[0] || embeddedBodyHtml || html;
-    return convertHtmlToPlainText(candidate);
+    throw new Error("Unable to fetch URL due to redirect handling failure.");
   } finally {
     clearTimeout(timeout);
   }
@@ -452,6 +636,13 @@ export async function onRequestPost(context: any): Promise<Response> {
 
   if (substackUrl && !isHttpUrl(substackUrl)) {
     return error(400, "BAD_REQUEST", "Field 'substackUrl' must be a valid HTTP(S) URL.", "INVALID_URL");
+  }
+
+  if (substackUrl) {
+    const restriction = getUrlRestrictionReason(new URL(substackUrl));
+    if (restriction) {
+      return error(400, "BAD_REQUEST", restriction, "DISALLOWED_URL_TARGET");
+    }
   }
 
   try {
