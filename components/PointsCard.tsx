@@ -17,11 +17,17 @@ const PointsCard: React.FC<PointsCardProps> = ({ slide, index }) => {
       </header>
 
       <figure className="p-4 sm:p-6 border-b border-line bg-canvas/72">
-        <img
-          src={slide.pageAsImage}
-          alt={`Slide ${slide.selectedPageNumber}`}
-          className="w-full h-auto rounded-xl border border-line shadow-float"
-        />
+        {slide.pageAsImage ? (
+          <img
+            src={slide.pageAsImage}
+            alt={`Slide ${slide.selectedPageNumber}`}
+            className="w-full h-auto rounded-xl border border-line shadow-float"
+          />
+        ) : (
+          <div className="w-full rounded-xl border border-line bg-white/80 px-4 py-8 text-center text-sm text-stone">
+            Slide preview unavailable in resumed session. Re-upload PDF for full image preview.
+          </div>
+        )}
       </figure>
 
       <div className="p-5 sm:p-6">

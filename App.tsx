@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   clearPersistedSession,
   loadPersistedSession,
@@ -28,6 +28,7 @@ import {
   CURRENT_SESSION_SCHEMA_VERSION,
   migratePersistedSessionSnapshot,
 } from './src/shared/state/sessionMigration';
+import { buildPersistableSession } from './src/shared/state/sessionPersistence';
 import type { PersistedAppSessionV2 } from './src/shared/state/sessionTypes';
 
 const formatSavedTimestamp = (timestamp: number): string => {
@@ -55,6 +56,7 @@ const App: React.FC = () => {
   const [isPersistenceBlocked, setIsPersistenceBlocked] = useState(false);
   const [sessionNotice, setSessionNotice] = useState('');
   const [persistenceNotice, setPersistenceNotice] = useState('');
+  const lastPersistedPayloadRef = useRef<string>('');
 
   const selectedChatterModel = provider === ProviderType.GEMINI ? geminiModel : openRouterModel;
   const selectedPointsModel = provider === ProviderType.GEMINI ? geminiPointsModel : openRouterPointsModel;
@@ -109,6 +111,7 @@ const App: React.FC = () => {
 
   const handleDiscardSavedSession = useCallback(async () => {
     await clearPersistedSession();
+    lastPersistedPayloadRef.current = '';
     setPendingResumeSession(null);
     setIsPersistenceReady(true);
     setIsPersistenceBlocked(false);
@@ -117,6 +120,7 @@ const App: React.FC = () => {
 
   const handleClearSavedSessionData = useCallback(async () => {
     await clearPersistedSession();
+    lastPersistedPayloadRef.current = '';
     setPendingResumeSession(null);
     setIsPersistenceBlocked(false);
     setPersistenceNotice('');
@@ -175,8 +179,21 @@ const App: React.FC = () => {
       plotline: plotlineFeature.sessionSlice,
     };
 
+    const persistablePayload = buildPersistableSession(payload);
+    let serializedPayload = '';
+    try {
+      serializedPayload = JSON.stringify(persistablePayload);
+    } catch {
+      setPersistenceNotice('Unable to save browser session right now.');
+      return;
+    }
+
+    if (serializedPayload === lastPersistedPayloadRef.current) {
+      return;
+    }
+
     const timer = window.setTimeout(async () => {
-      const status = await savePersistedSession(payload);
+      const status = await savePersistedSession(persistablePayload);
       if (status === 'quota_exceeded') {
         setIsPersistenceBlocked(true);
         setPersistenceNotice('Browser storage is full. Clear saved session data to resume autosave.');
@@ -192,9 +209,10 @@ const App: React.FC = () => {
       }
 
       if (status === 'ok' && !isPersistenceBlocked) {
+        lastPersistedPayloadRef.current = serializedPayload;
         setPersistenceNotice('');
       }
-    }, 650);
+    }, 1400);
 
     return () => {
       window.clearTimeout(timer);

@@ -1,3 +1,5 @@
+import { parseJsonBodyWithLimit } from "../../../_shared/request";
+
 interface ThreadQuoteCandidate {
   id: string;
   companyName: string;
@@ -609,18 +611,13 @@ const fetchTextFromUrl = async (substackUrl: string): Promise<string> => {
 
 export async function onRequestPost(context: any): Promise<Response> {
   const request = context.request as Request;
-
-  const contentLength = Number(request.headers.get("content-length") || "0");
-  if (contentLength > MAX_BODY_BYTES) {
-    return error(413, "BAD_REQUEST", "Request body is too large.", "BODY_TOO_LARGE");
+  const parsedBody = await parseJsonBodyWithLimit<any>(request, MAX_BODY_BYTES);
+  if (parsedBody.ok === false) {
+    return parsedBody.reason === "BODY_TOO_LARGE"
+      ? error(413, "BAD_REQUEST", "Request body is too large.", "BODY_TOO_LARGE")
+      : error(400, "BAD_REQUEST", "Request body must be valid JSON.", "INVALID_JSON");
   }
-
-  let body: any;
-  try {
-    body = await request.json();
-  } catch {
-    return error(400, "BAD_REQUEST", "Request body must be valid JSON.", "INVALID_JSON");
-  }
+  const body = parsedBody.body;
 
   const substackUrl = hasNonEmptyString(body?.substackUrl) ? body.substackUrl.trim() : "";
   const editionText = hasNonEmptyString(body?.editionText) ? body.editionText.trim() : "";

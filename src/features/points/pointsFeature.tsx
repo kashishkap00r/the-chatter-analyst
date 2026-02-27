@@ -221,8 +221,13 @@ export const usePointsFeature = ({ provider, selectedModel }: UsePointsFeaturePa
       setPointsBatchFiles([...nextFiles]);
 
       try {
-        const pageCount = await getPdfPageCount(nextFiles[fileIndex].file);
-        const initialChunkSize = getDynamicChunkSize(nextFiles[fileIndex].file.size, pageCount);
+        const fileBlob = nextFiles[fileIndex].file;
+        if (!(fileBlob instanceof File)) {
+          throw new Error('Original PDF is unavailable in this session. Re-upload the file to analyze.');
+        }
+
+        const pageCount = await getPdfPageCount(fileBlob);
+        const initialChunkSize = getDynamicChunkSize(fileBlob.size, pageCount);
         const ranges: Array<{ startPage: number; endPage: number }> = [];
         for (let startPage = 1; startPage <= pageCount; startPage += initialChunkSize) {
           ranges.push({
@@ -276,7 +281,7 @@ export const usePointsFeature = ({ provider, selectedModel }: UsePointsFeaturePa
             try {
               const renderProfile =
                 POINTS_RETRY_RENDER_PROFILES[Math.min(attempt, POINTS_RETRY_RENDER_PROFILES.length - 1)];
-              const pageImages = await convertPdfToImages(nextFiles[fileIndex].file, onChunkProgress, {
+              const pageImages = await convertPdfToImages(fileBlob, onChunkProgress, {
                 startPage: range.startPage,
                 endPage: range.endPage,
                 scale: renderProfile.scale,
@@ -427,7 +432,7 @@ export const usePointsFeature = ({ provider, selectedModel }: UsePointsFeaturePa
         if (selectedPages.length > 0) {
           updateFinalizingProgress('Finalizing: rendering selected slides in high quality...', 93);
           try {
-            const highQualityRender = await renderPdfPagesHighQuality(nextFiles[fileIndex].file, selectedPages, {
+            const highQualityRender = await renderPdfPagesHighQuality(fileBlob, selectedPages, {
               scale: 2.0,
               pngDataUrlMaxChars: 4_800_000,
               jpegFallbackQuality: 0.92,
@@ -582,6 +587,15 @@ export const usePointsFeature = ({ provider, selectedModel }: UsePointsFeaturePa
       setPointsBatchFiles((prev) =>
         prev.map((file) => {
           if (file.id !== id) return file;
+          if (!(file.file instanceof File)) {
+            return {
+              ...file,
+              status: 'error',
+              error: 'Original PDF is unavailable in this session. Re-upload the file to analyze.',
+              result: undefined,
+              progress: undefined,
+            };
+          }
           return {
             ...file,
             status: 'ready',

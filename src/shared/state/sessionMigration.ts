@@ -45,6 +45,7 @@ const MODEL_TYPE_VALUES = new Set<string>(Object.values(ModelType) as string[]);
 const PROVIDER_TYPE_VALUES = new Set<string>(Object.values(ProviderType) as string[]);
 const APP_MODE_VALUES = new Set<string>(['chatter', 'points', 'plotline']);
 const MAX_PLOTLINE_KEYWORDS = 20;
+const POINTS_REUPLOAD_REQUIRED_MESSAGE = 'Original PDF cannot be restored automatically. Re-upload to analyze.';
 
 const asRecord = (value: unknown): Record<string, unknown> | null => {
   if (!value || typeof value !== 'object') return null;
@@ -84,6 +85,20 @@ const normalizeRecoveredChatterFile = (file: BatchFile): BatchFile => {
 };
 
 const normalizeRecoveredPointsFile = (file: PointsBatchFile): PointsBatchFile => {
+  const hasRestorableFile = file.file instanceof File;
+  const needsFileForAnalysis = file.status === 'ready' || file.status === 'parsing' || file.status === 'analyzing';
+
+  if (needsFileForAnalysis && !hasRestorableFile) {
+    return {
+      ...file,
+      status: 'error',
+      progress: undefined,
+      file: undefined,
+      error: POINTS_REUPLOAD_REQUIRED_MESSAGE,
+      result: undefined,
+    };
+  }
+
   if (file.status === 'parsing' || file.status === 'analyzing') {
     return {
       ...file,

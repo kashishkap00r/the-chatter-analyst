@@ -112,7 +112,7 @@ export interface BatchFile {
 export interface SelectedSlide {
   selectedPageNumber: number;
   context: string;
-  pageAsImage: string; // Base64 encoded image
+  pageAsImage?: string; // Base64 encoded image
 }
 
 export interface PointsAndFiguresResult {
@@ -129,7 +129,7 @@ export interface PointsAndFiguresResult {
 export interface PointsBatchFile {
   id: string;
   name: string;
-  file: File;
+  file?: File;
   status: 'pending' | 'parsing' | 'ready' | 'analyzing' | 'complete' | 'error';
   result?: PointsAndFiguresResult;
   error?: string;
