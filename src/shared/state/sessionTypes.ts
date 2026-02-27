@@ -9,6 +9,7 @@ import type {
   ProviderType,
   ProgressEvent,
 } from '../../../types';
+import type { OpenRouterChatterTier } from '../config/modelOptions';
 
 export interface BatchProgressState {
   total: number;
@@ -20,6 +21,7 @@ export interface BatchProgressState {
 
 export interface SessionModelState {
   geminiModel: ModelType;
+  openRouterChatterTier: OpenRouterChatterTier;
   openRouterModel: ModelType;
   geminiPointsModel: ModelType;
   openRouterPointsModel: ModelType;

@@ -257,4 +257,6 @@ export enum ModelType {
   OPENROUTER_MINIMAX_M25 = 'minimax/minimax-m2.5',
   OPENROUTER_MISTRAL_LARGE_2512 = 'mistralai/mistral-large-2512',
   OPENROUTER_QWEN25_VL_32B = 'qwen/qwen2.5-vl-32b-instruct',
+  OPENROUTER_CLAUDE_SONNET_4 = 'anthropic/claude-sonnet-4',
+  OPENROUTER_GPT_41_MINI = 'openai/gpt-4.1-mini',
 }

@@ -50,11 +50,19 @@ const DEFAULT_PROVIDER = PROVIDER_GEMINI;
 const FLASH_MODEL = "gemini-2.5-flash";
 const FLASH_3_MODEL = "gemini-3-flash-preview";
 const PRO_MODEL = "gemini-3-pro-preview";
-const OPENROUTER_PRIMARY_MODEL = "deepseek/deepseek-v3.2";
-const OPENROUTER_BACKUP_MODEL = "minimax/minimax-m2.1";
+const OPENROUTER_STANDARD_PRIMARY_MODEL = "deepseek/deepseek-v3.2";
+const OPENROUTER_STANDARD_BACKUP_MODEL = "minimax/minimax-m2.1";
+const OPENROUTER_PREMIUM_PRIMARY_MODEL = "anthropic/claude-sonnet-4";
+const OPENROUTER_PREMIUM_BACKUP_MODEL = "openai/gpt-4.1-mini";
 const DEFAULT_MODEL = FLASH_3_MODEL;
 const ALLOWED_MODELS = new Set([FLASH_MODEL, FLASH_3_MODEL, PRO_MODEL]);
-const OPENROUTER_ALLOWED_MODELS = new Set([OPENROUTER_PRIMARY_MODEL, OPENROUTER_BACKUP_MODEL]);
+const OPENROUTER_PREMIUM_MODELS = new Set([OPENROUTER_PREMIUM_PRIMARY_MODEL, OPENROUTER_PREMIUM_BACKUP_MODEL]);
+const OPENROUTER_ALLOWED_MODELS = new Set([
+  OPENROUTER_STANDARD_PRIMARY_MODEL,
+  OPENROUTER_STANDARD_BACKUP_MODEL,
+  OPENROUTER_PREMIUM_PRIMARY_MODEL,
+  OPENROUTER_PREMIUM_BACKUP_MODEL,
+]);
 const UPSTREAM_DEPENDENCY_STATUS = 424;
 const VALIDATION_STATUS = 422;
 const MAX_TWEET_CHARS = 260;
@@ -66,7 +74,17 @@ const getModelAttemptOrder = (requestedModel: string): string[] =>
   getPrimarySecondaryTertiaryAttemptOrder(requestedModel, FLASH_MODEL, FLASH_3_MODEL, PRO_MODEL);
 
 const getOpenRouterAttemptOrder = (requestedModel: string): string[] =>
-  getPrimaryBackupAttemptOrder(requestedModel, OPENROUTER_PRIMARY_MODEL, OPENROUTER_BACKUP_MODEL);
+  OPENROUTER_PREMIUM_MODELS.has(requestedModel)
+    ? getPrimaryBackupAttemptOrder(
+        requestedModel,
+        OPENROUTER_PREMIUM_PRIMARY_MODEL,
+        OPENROUTER_PREMIUM_BACKUP_MODEL,
+      )
+    : getPrimaryBackupAttemptOrder(
+        requestedModel,
+        OPENROUTER_STANDARD_PRIMARY_MODEL,
+        OPENROUTER_STANDARD_BACKUP_MODEL,
+      );
 
 const normalizeTweet = (value: unknown): string => {
   if (typeof value !== "string") return "";
@@ -117,7 +135,7 @@ export async function onRequestPost(context: any): Promise<Response> {
 
   const model = resolveRequestedModel(body?.model, provider, {
     gemini: DEFAULT_MODEL,
-    openrouter: OPENROUTER_PRIMARY_MODEL,
+    openrouter: OPENROUTER_STANDARD_PRIMARY_MODEL,
   });
 
   if (!isAllowedProviderModel(provider, model, { gemini: ALLOWED_MODELS, openrouter: OPENROUTER_ALLOWED_MODELS })) {

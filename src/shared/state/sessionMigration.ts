@@ -9,12 +9,16 @@ import {
   type PointsBatchFile,
 } from '../../../types';
 import {
+  getDefaultOpenRouterChatterModelForTier,
+  inferOpenRouterChatterTierForModel,
+  isOpenRouterChatterModelInTier,
   OPENROUTER_CHATTER_DEFAULT_MODEL,
   OPENROUTER_CHATTER_MODEL_VALUES,
   OPENROUTER_PLOTLINE_DEFAULT_MODEL,
   OPENROUTER_PLOTLINE_MODEL_VALUES,
   OPENROUTER_POINTS_DEFAULT_MODEL,
   OPENROUTER_POINTS_MODEL_VALUES,
+  type OpenRouterChatterTier,
 } from '../config/modelOptions';
 import type { ChatterSessionSlice, PersistedAppSessionV2, PlotlineSessionSlice, PointsSessionSlice } from './sessionTypes';
 
@@ -28,6 +32,7 @@ interface LegacyPersistedAppSessionV1 {
   textInput?: unknown;
   provider?: unknown;
   geminiModel?: unknown;
+  openRouterChatterTier?: unknown;
   openRouterModel?: unknown;
   geminiPointsModel?: unknown;
   openRouterPointsModel?: unknown;
@@ -214,6 +219,16 @@ const resolveScopedOpenRouterModel = (
   return allowedModels.has(parsed) ? parsed : fallback;
 };
 
+const resolveOpenRouterChatterTier = (
+  value: unknown,
+  chatterModel: ModelType,
+): OpenRouterChatterTier => {
+  if (value === 'standard' || value === 'premium') {
+    return value;
+  }
+  return inferOpenRouterChatterTierForModel(chatterModel);
+};
+
 const toArray = <T>(value: unknown): T[] => (Array.isArray(value) ? (value as T[]) : []);
 
 const normalizeChatterSingleState = (value: unknown): ChatterAnalysisState => {
@@ -283,6 +298,18 @@ const normalizeV2Session = (candidate: Record<string, unknown>): PersistedAppSes
   const chatter = asRecord(candidate.chatter) || {};
   const points = asRecord(candidate.points) || {};
   const plotline = asRecord(candidate.plotline) || {};
+  const parsedOpenRouterChatterModel = resolveScopedOpenRouterModel(
+    models.openRouterModel,
+    OPENROUTER_CHATTER_DEFAULT_MODEL,
+    OPENROUTER_CHATTER_MODEL_VALUES,
+  );
+  const openRouterChatterTier = resolveOpenRouterChatterTier(
+    models.openRouterChatterTier,
+    parsedOpenRouterChatterModel,
+  );
+  const openRouterChatterModel = isOpenRouterChatterModelInTier(parsedOpenRouterChatterModel, openRouterChatterTier)
+    ? parsedOpenRouterChatterModel
+    : getDefaultOpenRouterChatterModelForTier(openRouterChatterTier);
 
   return {
     schemaVersion: 2,
@@ -291,11 +318,8 @@ const normalizeV2Session = (candidate: Record<string, unknown>): PersistedAppSes
     provider: resolveProvider(candidate.provider),
     models: {
       geminiModel: resolveModel(models.geminiModel, ModelType.FLASH_3),
-      openRouterModel: resolveScopedOpenRouterModel(
-        models.openRouterModel,
-        OPENROUTER_CHATTER_DEFAULT_MODEL,
-        OPENROUTER_CHATTER_MODEL_VALUES,
-      ),
+      openRouterChatterTier,
+      openRouterModel: openRouterChatterModel,
       geminiPointsModel: resolveModel(models.geminiPointsModel, ModelType.FLASH_3),
       openRouterPointsModel: resolveScopedOpenRouterModel(
         models.openRouterPointsModel,
@@ -323,6 +347,7 @@ const normalizeLegacyV1Session = (candidate: LegacyPersistedAppSessionV1): Persi
     provider: candidate.provider,
     models: {
       geminiModel: candidate.geminiModel,
+      openRouterChatterTier: candidate.openRouterChatterTier,
       openRouterModel: candidate.openRouterModel,
       geminiPointsModel: candidate.geminiPointsModel,
       openRouterPointsModel: candidate.openRouterPointsModel,

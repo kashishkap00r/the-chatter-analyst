@@ -19,10 +19,15 @@ import {
 } from './src/features/plotline/plotlineFeature';
 import {
   GEMINI_MODEL_OPTIONS,
+  OPENROUTER_CHATTER_DEFAULT_TIER,
   OPENROUTER_CHATTER_DEFAULT_MODEL,
+  OPENROUTER_CHATTER_TIER_OPTIONS,
   OPENROUTER_PLOTLINE_DEFAULT_MODEL,
   OPENROUTER_POINTS_DEFAULT_MODEL,
+  getDefaultOpenRouterChatterModelForTier,
   getOpenRouterModelOptions,
+  isOpenRouterChatterModelInTier,
+  type OpenRouterChatterTier,
 } from './src/shared/config/modelOptions';
 import {
   CURRENT_SESSION_SCHEMA_VERSION,
@@ -45,6 +50,7 @@ const App: React.FC = () => {
   const [provider, setProvider] = useState<ProviderType>(ProviderType.GEMINI);
 
   const [geminiModel, setGeminiModel] = useState<ModelType>(ModelType.FLASH_3);
+  const [openRouterChatterTier, setOpenRouterChatterTier] = useState<OpenRouterChatterTier>(OPENROUTER_CHATTER_DEFAULT_TIER);
   const [openRouterModel, setOpenRouterModel] = useState<ModelType>(OPENROUTER_CHATTER_DEFAULT_MODEL);
   const [geminiPointsModel, setGeminiPointsModel] = useState<ModelType>(ModelType.FLASH_3);
   const [openRouterPointsModel, setOpenRouterPointsModel] = useState<ModelType>(OPENROUTER_POINTS_DEFAULT_MODEL);
@@ -75,7 +81,10 @@ const App: React.FC = () => {
     selectedModel: selectedPlotlineModel,
   });
 
-  const currentOpenRouterModelOptions = getOpenRouterModelOptions(appMode);
+  const currentOpenRouterModelOptions = getOpenRouterModelOptions(
+    appMode,
+    appMode === 'chatter' ? openRouterChatterTier : undefined,
+  );
   const currentModelOptions = provider === ProviderType.GEMINI ? GEMINI_MODEL_OPTIONS : currentOpenRouterModelOptions;
 
   const applyPersistedSession = useCallback(
@@ -83,6 +92,7 @@ const App: React.FC = () => {
       setAppMode(snapshot.appMode);
       setProvider(snapshot.provider);
       setGeminiModel(snapshot.models.geminiModel);
+      setOpenRouterChatterTier(snapshot.models.openRouterChatterTier);
       setOpenRouterModel(snapshot.models.openRouterModel);
       setGeminiPointsModel(snapshot.models.geminiPointsModel);
       setOpenRouterPointsModel(snapshot.models.openRouterPointsModel);
@@ -168,6 +178,7 @@ const App: React.FC = () => {
       provider,
       models: {
         geminiModel,
+        openRouterChatterTier,
         openRouterModel,
         geminiPointsModel,
         openRouterPointsModel,
@@ -221,6 +232,7 @@ const App: React.FC = () => {
     appMode,
     provider,
     geminiModel,
+    openRouterChatterTier,
     openRouterModel,
     geminiPointsModel,
     openRouterPointsModel,
@@ -265,6 +277,30 @@ const App: React.FC = () => {
                     <option value={ProviderType.OPENROUTER}>OpenRouter</option>
                   </select>
                 </label>
+
+                {provider === ProviderType.OPENROUTER && appMode === 'chatter' && (
+                  <label className="control-label">
+                    Tier
+                    <select
+                      value={openRouterChatterTier}
+                      onChange={(event) => {
+                        const nextTier = event.target.value as OpenRouterChatterTier;
+                        setOpenRouterChatterTier(nextTier);
+                        if (!isOpenRouterChatterModelInTier(openRouterModel, nextTier)) {
+                          setOpenRouterModel(getDefaultOpenRouterChatterModelForTier(nextTier));
+                        }
+                      }}
+                      disabled={isResumeDecisionPending}
+                      className="control-select"
+                    >
+                      {OPENROUTER_CHATTER_TIER_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
 
                 <label className="control-label">
                   Model
