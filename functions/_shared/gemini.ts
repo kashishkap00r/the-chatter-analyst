@@ -53,6 +53,33 @@ export const CHATTER_RESPONSE_SCHEMA = {
   ],
 };
 
+export const CHATTER_REPAIR_RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    quotes: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          index: { type: "INTEGER" },
+          summary: { type: "STRING" },
+          speaker: {
+            type: "OBJECT",
+            properties: {
+              name: { type: "STRING" },
+              designation: { type: "STRING" },
+            },
+            required: ["name", "designation"],
+          },
+          category: { type: "STRING" },
+        },
+        required: ["index", "summary", "speaker", "category"],
+      },
+    },
+  },
+  required: ["quotes"],
+};
+
 export const POINTS_RESPONSE_SCHEMA = {
   type: "OBJECT",
   properties: {
@@ -282,6 +309,34 @@ SELF-CHECK BEFORE FINALIZING
 - Confirm quote count is at most 20, and target at least 8 when sufficient high-signal material exists.
 - Confirm both prepared remarks and Q&A answers are represented where available.
 - Confirm output is valid JSON with all required fields.
+`.trim();
+
+export const CHATTER_REPAIR_PROMPT = `
+ROLE
+You are repairing incomplete JSON output for The Chatter transcript analysis.
+
+GOAL
+- Fill ONLY missing fields for quotes.
+- Preserve original quote text exactly as provided.
+
+RULES
+- For each quote index in input, return:
+  1) summary: exactly 2 short sentences in simple English
+  2) speaker.name and speaker.designation
+  3) category from this set only:
+     Financial Guidance, Capital Allocation, Cost & Supply Chain, Tech & Disruption,
+     Regulation & Policy, Macro & Geopolitics, ESG & Climate, Legal & Governance,
+     Competitive Landscape, Other Material
+- Keep summaries investor-relevant and concrete.
+- Do not invent facts outside the provided quote text.
+- If speaker details are unclear, use:
+  speaker.name = "Management"
+  speaker.designation = "Company Management"
+
+OUTPUT
+- Return strict JSON only:
+  { "quotes": [{ "index": number, "summary": string, "speaker": { "name": string, "designation": string }, "category": string }] }
+- Return one repaired entry for each input index.
 `.trim();
 
 export const POINTS_PROMPT = `

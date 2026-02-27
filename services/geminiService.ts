@@ -651,7 +651,7 @@ export const analyzePresentation = async (
         pageAsImage: pageImages[pageIndex],
       };
     })
-    .filter((slide): slide is SelectedSlide => Boolean(slide));
+    .filter((slide): slide is Exclude<typeof slide, null> => slide !== null);
 
   if (slidesWithImages.length === 0) {
     throw new Error("AI returned invalid page numbers.");

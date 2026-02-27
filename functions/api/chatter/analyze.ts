@@ -2,9 +2,31 @@ import {
   callGeminiJson,
   callOpenRouterJson,
   CHATTER_PROMPT,
+  CHATTER_REPAIR_PROMPT,
+  CHATTER_REPAIR_RESPONSE_SCHEMA,
   CHATTER_RESPONSE_SCHEMA,
   normalizeGeminiProviderPreference,
 } from "../../_shared/gemini";
+import { parseJsonBodyWithLimit } from "../../_shared/request";
+import { error, json } from "../../_shared/response";
+import {
+  isAllowedProviderModel,
+  parseProvider as parseProviderValue,
+  resolveRequestedModel,
+} from "../../_shared/providerModels";
+import {
+  extractRetryAfterSeconds,
+  getPrimaryBackupAttemptOrder,
+  getPrimarySecondaryTertiaryAttemptOrder,
+  isLocationUnsupportedError,
+  isOverloadError,
+  isSchemaConstraintError,
+  isStructuredOutputError,
+  isTimeoutError,
+  isUpstreamRateLimit as isUpstreamRateLimitBase,
+  isUpstreamTransientError as isUpstreamTransientErrorBase,
+} from "../../_shared/retryPolicy";
+import { hasNonEmptyString } from "../../_shared/validation";
 
 interface Env {
   GEMINI_API_KEY?: string;
@@ -23,11 +45,24 @@ const DEFAULT_PROVIDER = PROVIDER_GEMINI;
 const FLASH_MODEL = "gemini-2.5-flash";
 const FLASH_3_MODEL = "gemini-3-flash-preview";
 const PRO_MODEL = "gemini-3-pro-preview";
-const OPENROUTER_PRIMARY_MODEL = "deepseek/deepseek-v3.2";
-const OPENROUTER_BACKUP_MODEL = "minimax/minimax-m2.1";
+const OPENROUTER_STANDARD_PRIMARY_MODEL = "deepseek/deepseek-v3.2";
+const OPENROUTER_STANDARD_BACKUP_MODEL = "minimax/minimax-m2.1";
+const OPENROUTER_PREMIUM_PRIMARY_MODEL = "anthropic/claude-sonnet-4";
+const OPENROUTER_PREMIUM_BACKUP_MODEL = "openai/gpt-4.1-mini";
 const DEFAULT_MODEL = FLASH_3_MODEL;
 const ALLOWED_MODELS = new Set([FLASH_MODEL, FLASH_3_MODEL, PRO_MODEL]);
-const OPENROUTER_ALLOWED_MODELS = new Set([OPENROUTER_PRIMARY_MODEL, OPENROUTER_BACKUP_MODEL]);
+const OPENROUTER_STANDARD_MODELS = new Set([
+  OPENROUTER_STANDARD_PRIMARY_MODEL,
+  OPENROUTER_STANDARD_BACKUP_MODEL,
+]);
+const OPENROUTER_PREMIUM_MODELS = new Set([
+  OPENROUTER_PREMIUM_PRIMARY_MODEL,
+  OPENROUTER_PREMIUM_BACKUP_MODEL,
+]);
+const OPENROUTER_ALLOWED_MODELS = new Set([
+  ...OPENROUTER_STANDARD_MODELS,
+  ...OPENROUTER_PREMIUM_MODELS,
+]);
 const MAX_QUOTES_COUNT = 20;
 const UPSTREAM_DEPENDENCY_STATUS = 424;
 const VALIDATION_STATUS = 422;
@@ -54,20 +89,6 @@ const CATEGORY_NORMALIZATION_RULES: Array<{ match: RegExp; normalized: string }>
   { match: /(legal|governance|litigation|audit)/i, normalized: "Legal & Governance" },
   { match: /(competitive|competition|market share|peer)/i, normalized: "Competitive Landscape" },
 ];
-
-const json = (payload: unknown, status = 200): Response =>
-  new Response(JSON.stringify(payload), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-    },
-  });
-
-const error = (status: number, code: string, message: string, reasonCode?: string, details?: unknown): Response =>
-  json({ error: { code, message, reasonCode, details } }, status);
-
-const hasNonEmptyString = (value: unknown): value is string =>
-  typeof value === "string" && value.trim().length > 0;
 
 const normalizeNseScrip = (value: unknown): string => {
   if (!hasNonEmptyString(value)) return "";
@@ -98,64 +119,6 @@ const normalizeNseScrip = (value: unknown): string => {
   return filtered[filtered.length - 1];
 };
 
-const extractRetryAfterSeconds = (message: string): number | null => {
-  const match = message.match(/retry in\s+([\d.]+)s/i);
-  if (!match) return null;
-  const parsed = Number(match[1]);
-  if (!Number.isFinite(parsed) || parsed <= 0) return null;
-  return Math.max(1, Math.ceil(parsed));
-};
-
-const isUpstreamRateLimit = (message: string): boolean => {
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("429") ||
-    normalized.includes("quota") ||
-    normalized.includes("rate limit") ||
-    normalized.includes("too many requests") ||
-    normalized.includes("resource exhausted") ||
-    normalized.includes("generate_content_free_tier_requests")
-  );
-};
-
-const isSchemaConstraintError = (message: string): boolean => {
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("too many states") ||
-    normalized.includes("specified schema produces a constraint")
-  );
-};
-
-const isOverloadError = (message: string): boolean => {
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("503") ||
-    normalized.includes("overload") ||
-    normalized.includes("high demand") ||
-    normalized.includes("temporarily unavailable")
-  );
-};
-
-const isTimeoutError = (message: string): boolean => {
-  const normalized = message.toLowerCase();
-  return normalized.includes("timed out") || normalized.includes("timeout");
-};
-
-const isLocationUnsupportedError = (message: string): boolean => {
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("user location is not supported for the api use") ||
-    normalized.includes("location is not supported for the api use")
-  );
-};
-
-const isUpstreamTransientError = (message: string): boolean =>
-  isOverloadError(message) ||
-  isTimeoutError(message) ||
-  message.includes("500") ||
-  message.includes("502") ||
-  message.includes("504");
-
 const normalizeCategory = (rawCategory: string): string => {
   const trimmed = rawCategory.trim();
   if (!trimmed) {
@@ -172,34 +135,218 @@ const normalizeCategory = (rawCategory: string): string => {
   return "Other Material";
 };
 
-const getModelAttemptOrder = (requestedModel: string): string[] => {
-  if (requestedModel === FLASH_MODEL) {
-    return [FLASH_MODEL, FLASH_3_MODEL, PRO_MODEL];
+const parseProvider = (value: unknown): ReturnType<typeof parseProviderValue> =>
+  parseProviderValue(value, DEFAULT_PROVIDER);
+
+const getModelAttemptOrder = (requestedModel: string): string[] =>
+  getPrimarySecondaryTertiaryAttemptOrder(requestedModel, FLASH_MODEL, FLASH_3_MODEL, PRO_MODEL);
+
+const getOpenRouterAttemptOrder = (requestedModel: string): string[] =>
+  OPENROUTER_PREMIUM_MODELS.has(requestedModel)
+    ? getPrimaryBackupAttemptOrder(
+        requestedModel,
+        OPENROUTER_PREMIUM_PRIMARY_MODEL,
+        OPENROUTER_PREMIUM_BACKUP_MODEL,
+      )
+    : getPrimaryBackupAttemptOrder(
+        requestedModel,
+        OPENROUTER_STANDARD_PRIMARY_MODEL,
+        OPENROUTER_STANDARD_BACKUP_MODEL,
+      );
+
+const isUpstreamRateLimit = (message: string): boolean =>
+  isUpstreamRateLimitBase(message, { includeFreeTierRateLimitToken: true });
+
+const isUpstreamTransientError = (message: string): boolean => isUpstreamTransientErrorBase(message);
+
+interface OpenRouterRepairCandidate {
+  index: number;
+  quote: string;
+  summary?: string;
+  category?: string;
+  speakerName?: string;
+  speakerDesignation?: string;
+  missingFields: string[];
+}
+
+interface OpenRouterRepairInspection {
+  fatalError: string | null;
+  candidates: OpenRouterRepairCandidate[];
+}
+
+const inspectOpenRouterRepairability = (result: any): OpenRouterRepairInspection => {
+  if (!result || typeof result !== "object") {
+    return { fatalError: "Gemini response is not a JSON object.", candidates: [] };
   }
-  if (requestedModel === FLASH_3_MODEL) {
-    return [FLASH_3_MODEL, FLASH_MODEL, PRO_MODEL];
+
+  const requiredRootFields = [
+    "companyName",
+    "fiscalPeriod",
+    "marketCapCategory",
+    "industry",
+    "companyDescription",
+  ];
+  for (const field of requiredRootFields) {
+    if (!hasNonEmptyString(result[field])) {
+      return { fatalError: `Missing or invalid field '${field}'.`, candidates: [] };
+    }
   }
-  return [PRO_MODEL, FLASH_3_MODEL, FLASH_MODEL];
+
+  result.nseScrip = normalizeNseScrip(result.nseScrip);
+
+  if (!Array.isArray(result.quotes)) {
+    return { fatalError: "Field 'quotes' must be an array.", candidates: [] };
+  }
+  if (result.quotes.length < 1) {
+    return { fatalError: "Field 'quotes' must contain at least 1 item.", candidates: [] };
+  }
+  if (result.quotes.length > MAX_QUOTES_COUNT) {
+    return {
+      fatalError: `Field 'quotes' must contain at most ${MAX_QUOTES_COUNT} items, got ${result.quotes.length}.`,
+      candidates: [],
+    };
+  }
+
+  const candidates: OpenRouterRepairCandidate[] = [];
+  for (let i = 0; i < result.quotes.length; i++) {
+    const quoteItem = result.quotes[i];
+    const quoteIndex = i + 1;
+    if (!quoteItem || typeof quoteItem !== "object") {
+      return { fatalError: `Quote #${quoteIndex} is invalid.`, candidates: [] };
+    }
+    if (!hasNonEmptyString(quoteItem.quote)) {
+      return { fatalError: `Quote #${quoteIndex} is missing 'quote'.`, candidates: [] };
+    }
+
+    const missingFields: string[] = [];
+    if (!hasNonEmptyString(quoteItem.summary)) {
+      missingFields.push("summary");
+    }
+    if (!hasNonEmptyString(quoteItem.category)) {
+      missingFields.push("category");
+    }
+    if (!quoteItem.speaker || typeof quoteItem.speaker !== "object") {
+      missingFields.push("speaker.name");
+      missingFields.push("speaker.designation");
+    } else {
+      if (!hasNonEmptyString(quoteItem.speaker.name)) {
+        missingFields.push("speaker.name");
+      }
+      if (!hasNonEmptyString(quoteItem.speaker.designation)) {
+        missingFields.push("speaker.designation");
+      }
+    }
+
+    if (missingFields.length > 0) {
+      candidates.push({
+        index: i,
+        quote: quoteItem.quote,
+        summary: hasNonEmptyString(quoteItem.summary) ? quoteItem.summary : undefined,
+        category: hasNonEmptyString(quoteItem.category) ? quoteItem.category : undefined,
+        speakerName: hasNonEmptyString(quoteItem?.speaker?.name) ? quoteItem.speaker.name : undefined,
+        speakerDesignation: hasNonEmptyString(quoteItem?.speaker?.designation)
+          ? quoteItem.speaker.designation
+          : undefined,
+        missingFields,
+      });
+    }
+  }
+
+  return {
+    fatalError: null,
+    candidates,
+  };
 };
 
-const parseProvider = (value: unknown): string => {
-  if (typeof value !== "string") return DEFAULT_PROVIDER;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === PROVIDER_GEMINI) return PROVIDER_GEMINI;
-  if (normalized === PROVIDER_OPENROUTER) return PROVIDER_OPENROUTER;
-  return "";
-};
-
-const getOpenRouterAttemptOrder = (requestedModel: string): string[] => {
-  if (requestedModel === OPENROUTER_PRIMARY_MODEL) {
-    return [OPENROUTER_PRIMARY_MODEL, OPENROUTER_BACKUP_MODEL];
+const repairOpenRouterChatterResult = async (params: {
+  result: any;
+  candidates: OpenRouterRepairCandidate[];
+  model: string;
+  requestId: string;
+  apiKey: string;
+  referer?: string;
+  appTitle?: string;
+}): Promise<{ repairedCount: number }> => {
+  const { result, candidates, model, requestId, apiKey, referer, appTitle } = params;
+  if (!Array.isArray(result?.quotes) || candidates.length === 0) {
+    return { repairedCount: 0 };
   }
-  return [OPENROUTER_BACKUP_MODEL, OPENROUTER_PRIMARY_MODEL];
-};
 
-const isStructuredOutputError = (message: string): boolean => {
-  const normalized = message.toLowerCase();
-  return normalized.includes("invalid json") || normalized.includes("empty response");
+  const repairInput = {
+    companyName: result.companyName,
+    fiscalPeriod: result.fiscalPeriod,
+    marketCapCategory: result.marketCapCategory,
+    industry: result.industry,
+    companyDescription: result.companyDescription,
+    quotes: candidates.map((candidate) => ({
+      index: candidate.index,
+      quote: candidate.quote,
+      summary: candidate.summary,
+      category: candidate.category,
+      speakerName: candidate.speakerName,
+      speakerDesignation: candidate.speakerDesignation,
+      missingFields: candidate.missingFields,
+    })),
+  };
+
+  const repairResponse = await callOpenRouterJson({
+    apiKey,
+    model,
+    requestId,
+    referer,
+    appTitle: appTitle || "The Chatter Analyst",
+    messageContent:
+      `${CHATTER_REPAIR_PROMPT}\n\nINPUT JSON:\n${JSON.stringify(repairInput)}\n\n` +
+      `RESPONSE JSON SCHEMA:\n${JSON.stringify(CHATTER_REPAIR_RESPONSE_SCHEMA)}\n\n` +
+      "FINAL OUTPUT REQUIREMENT: Return only one valid JSON object. No markdown, no explanation.",
+  });
+
+  const repairedItems = Array.isArray(repairResponse?.quotes) ? repairResponse.quotes : [];
+  let repairedCount = 0;
+
+  for (const rawItem of repairedItems) {
+    if (!rawItem || !Number.isInteger(rawItem.index)) continue;
+    const quoteIndex = Number(rawItem.index);
+    if (quoteIndex < 0 || quoteIndex >= result.quotes.length) continue;
+
+    const quote = result.quotes[quoteIndex];
+    if (!quote || typeof quote !== "object") continue;
+
+    let changed = false;
+
+    if (hasNonEmptyString(rawItem.summary)) {
+      quote.summary = rawItem.summary.trim();
+      changed = true;
+    }
+    if (hasNonEmptyString(rawItem.category)) {
+      quote.category = normalizeCategory(rawItem.category);
+      changed = true;
+    }
+
+    const speakerName = hasNonEmptyString(rawItem?.speaker?.name)
+      ? rawItem.speaker.name.trim()
+      : undefined;
+    const speakerDesignation = hasNonEmptyString(rawItem?.speaker?.designation)
+      ? rawItem.speaker.designation.trim()
+      : undefined;
+    if (speakerName || speakerDesignation) {
+      quote.speaker = {
+        name:
+          speakerName ||
+          (hasNonEmptyString(quote?.speaker?.name) ? quote.speaker.name : "Management"),
+        designation:
+          speakerDesignation ||
+          (hasNonEmptyString(quote?.speaker?.designation) ? quote.speaker.designation : "Company Management"),
+      };
+      changed = true;
+    }
+
+    if (changed) {
+      repairedCount += 1;
+    }
+  }
+
+  return { repairedCount };
 };
 
 const validateChatterResult = (result: any): string | null => {
@@ -270,17 +417,13 @@ export async function onRequestPost(context: any): Promise<Response> {
   const env = context.env as Env;
   const requestId = request.headers.get("cf-ray") || crypto.randomUUID();
 
-  const contentLength = Number(request.headers.get("content-length") || "0");
-  if (contentLength > MAX_BODY_BYTES) {
-    return error(413, "BAD_REQUEST", "Request body is too large.", "BODY_TOO_LARGE");
+  const parsedBody = await parseJsonBodyWithLimit<any>(request, MAX_BODY_BYTES);
+  if (parsedBody.ok === false) {
+    return parsedBody.reason === "BODY_TOO_LARGE"
+      ? error(413, "BAD_REQUEST", "Request body is too large.", "BODY_TOO_LARGE")
+      : error(400, "BAD_REQUEST", "Request body must be valid JSON.", "INVALID_JSON");
   }
-
-  let body: any;
-  try {
-    body = await request.json();
-  } catch {
-    return error(400, "BAD_REQUEST", "Request body must be valid JSON.", "INVALID_JSON");
-  }
+  const body = parsedBody.body;
 
   const transcript = typeof body?.transcript === "string" ? body.transcript.trim() : "";
   if (!transcript) {
@@ -292,18 +435,15 @@ export async function onRequestPost(context: any): Promise<Response> {
     return error(400, "BAD_REQUEST", "Field 'provider' is invalid.", "INVALID_PROVIDER");
   }
 
-  const model =
-    typeof body?.model === "string" && body.model.trim()
-      ? body.model.trim()
-      : provider === PROVIDER_OPENROUTER
-        ? OPENROUTER_PRIMARY_MODEL
-        : DEFAULT_MODEL;
+  const model = resolveRequestedModel(body?.model, provider, {
+    gemini: DEFAULT_MODEL,
+    openrouter: OPENROUTER_STANDARD_PRIMARY_MODEL,
+  });
 
-  if (provider === PROVIDER_GEMINI && !ALLOWED_MODELS.has(model)) {
-    return error(400, "BAD_REQUEST", "Field 'model' is invalid for provider 'gemini'.", "INVALID_MODEL");
-  }
-  if (provider === PROVIDER_OPENROUTER && !OPENROUTER_ALLOWED_MODELS.has(model)) {
-    return error(400, "BAD_REQUEST", "Field 'model' is invalid for provider 'openrouter'.", "INVALID_MODEL");
+  if (!isAllowedProviderModel(provider, model, { gemini: ALLOWED_MODELS, openrouter: OPENROUTER_ALLOWED_MODELS })) {
+    return provider === PROVIDER_GEMINI
+      ? error(400, "BAD_REQUEST", "Field 'model' is invalid for provider 'gemini'.", "INVALID_MODEL")
+      : error(400, "BAD_REQUEST", "Field 'model' is invalid for provider 'openrouter'.", "INVALID_MODEL");
   }
 
   const primaryApiKey = env?.GEMINI_API_KEY;
@@ -364,22 +504,130 @@ export async function onRequestPost(context: any): Promise<Response> {
                 "FINAL OUTPUT REQUIREMENT: Return only one valid JSON object. No markdown, no explanation.",
             });
 
+      let repairPhase: "none" | "openrouter_repair" = "none";
+      if (provider === PROVIDER_OPENROUTER) {
+        const inspection = inspectOpenRouterRepairability(result);
+        if (inspection.fatalError) {
+          console.log(
+            JSON.stringify({
+              event: "chatter_openrouter_validation_issue",
+              requestId,
+              model: attemptModel,
+              phase: "validate_initial",
+              fatalError: inspection.fatalError,
+            }),
+          );
+
+          if (hasFallback) {
+            console.log(
+              JSON.stringify({
+                event: "chatter_openrouter_fallback_phase",
+                requestId,
+                requestedModel: model,
+                failedModel: attemptModel,
+                phase: "validate_initial",
+              }),
+            );
+            lastMessage = inspection.fatalError;
+            continue;
+          }
+        } else if (inspection.candidates.length > 0) {
+          repairPhase = "openrouter_repair";
+          const missingFieldsCount = inspection.candidates.reduce(
+            (sum, candidate) => sum + candidate.missingFields.length,
+            0,
+          );
+          console.log(
+            JSON.stringify({
+              event: "chatter_openrouter_repair_attempt",
+              requestId,
+              model: attemptModel,
+              candidates: inspection.candidates.length,
+              missingFieldsCount,
+            }),
+          );
+
+          try {
+            const repairOutcome = await repairOpenRouterChatterResult({
+              result,
+              candidates: inspection.candidates,
+              model: attemptModel,
+              requestId,
+              apiKey: openRouterApiKey as string,
+              referer: env.OPENROUTER_SITE_URL,
+              appTitle: env.OPENROUTER_APP_TITLE,
+            });
+
+            console.log(
+              JSON.stringify({
+                event: "chatter_openrouter_repair_success",
+                requestId,
+                model: attemptModel,
+                repairedCount: repairOutcome.repairedCount,
+                candidates: inspection.candidates.length,
+              }),
+            );
+          } catch (repairError: any) {
+            const repairMessage = String(repairError?.message || "Unknown repair failure.");
+            console.log(
+              JSON.stringify({
+                event: "chatter_openrouter_repair_failure",
+                requestId,
+                model: attemptModel,
+                message: repairMessage,
+              }),
+            );
+
+            if (hasFallback) {
+              console.log(
+                JSON.stringify({
+                  event: "chatter_openrouter_fallback_phase",
+                  requestId,
+                  requestedModel: model,
+                  failedModel: attemptModel,
+                  phase: "openrouter_repair",
+                }),
+              );
+              lastMessage = repairMessage;
+              continue;
+            }
+          }
+        }
+      }
+
       const validationError = validateChatterResult(result);
       if (validationError) {
+        const phase = repairPhase === "openrouter_repair" ? "validate_after_repair" : "validate_initial";
         console.log(
           JSON.stringify({
             event: "chatter_request_validation_failed",
             requestId,
             model: attemptModel,
             validationError,
+            phase,
           }),
         );
+
+        if (provider === PROVIDER_OPENROUTER && hasFallback) {
+          console.log(
+            JSON.stringify({
+              event: "chatter_openrouter_fallback_phase",
+              requestId,
+              requestedModel: model,
+              failedModel: attemptModel,
+              phase,
+            }),
+          );
+          lastMessage = validationError;
+          continue;
+        }
+
         return error(
           VALIDATION_STATUS,
           "UPSTREAM_ERROR",
           "Transcript analysis failed validation.",
           "VALIDATION_FAILED",
-          { requestId, validationError, model: attemptModel },
+          { requestId, validationError, model: attemptModel, phase },
         );
       }
 

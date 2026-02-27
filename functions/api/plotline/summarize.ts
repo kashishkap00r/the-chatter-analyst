@@ -5,6 +5,18 @@ import {
   PLOTLINE_PLAN_PROMPT,
   PLOTLINE_PLAN_RESPONSE_SCHEMA,
 } from "../../_shared/gemini";
+import { parseJsonBodyWithLimit } from "../../_shared/request";
+import { error, json } from "../../_shared/response";
+import {
+  isAllowedProviderModel,
+  parseProvider as parseProviderValue,
+  resolveRequestedModel,
+} from "../../_shared/providerModels";
+import {
+  getPrimaryBackupAttemptOrder,
+  getPrimarySecondaryTertiaryAttemptOrder,
+} from "../../_shared/retryPolicy";
+import { hasNonEmptyString, isInteger } from "../../_shared/validation";
 
 interface Env {
   GEMINI_API_KEY?: string;
@@ -72,23 +84,6 @@ const DEFAULT_MODEL = FLASH_3_MODEL;
 const ALLOWED_MODELS = new Set([FLASH_MODEL, FLASH_3_MODEL, PRO_MODEL]);
 const OPENROUTER_ALLOWED_MODELS = new Set([OPENROUTER_PRIMARY_MODEL, OPENROUTER_BACKUP_MODEL]);
 
-const json = (payload: unknown, status = 200): Response =>
-  new Response(JSON.stringify(payload), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-    },
-  });
-
-const error = (status: number, code: string, message: string, reasonCode?: string, details?: unknown): Response =>
-  json({ error: { code, message, reasonCode, details } }, status);
-
-const hasNonEmptyString = (value: unknown): value is string =>
-  typeof value === "string" && value.trim().length > 0;
-
-const isInteger = (value: unknown): value is number =>
-  typeof value === "number" && Number.isInteger(value);
-
 const normalizeToken = (value: string): string =>
   value
     .toLowerCase()
@@ -96,30 +91,14 @@ const normalizeToken = (value: string): string =>
     .replace(/\s+/g, " ")
     .trim();
 
-const parseProvider = (value: unknown): string => {
-  if (typeof value !== "string") return DEFAULT_PROVIDER;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === PROVIDER_GEMINI) return PROVIDER_GEMINI;
-  if (normalized === PROVIDER_OPENROUTER) return PROVIDER_OPENROUTER;
-  return "";
-};
+const parseProvider = (value: unknown): ReturnType<typeof parseProviderValue> =>
+  parseProviderValue(value, DEFAULT_PROVIDER);
 
-const getModelAttemptOrder = (requestedModel: string): string[] => {
-  if (requestedModel === FLASH_MODEL) {
-    return [FLASH_MODEL, FLASH_3_MODEL, PRO_MODEL];
-  }
-  if (requestedModel === FLASH_3_MODEL) {
-    return [FLASH_3_MODEL, FLASH_MODEL, PRO_MODEL];
-  }
-  return [PRO_MODEL, FLASH_3_MODEL, FLASH_MODEL];
-};
+const getModelAttemptOrder = (requestedModel: string): string[] =>
+  getPrimarySecondaryTertiaryAttemptOrder(requestedModel, FLASH_MODEL, FLASH_3_MODEL, PRO_MODEL);
 
-const getOpenRouterAttemptOrder = (requestedModel: string): string[] => {
-  if (requestedModel === OPENROUTER_PRIMARY_MODEL) {
-    return [OPENROUTER_PRIMARY_MODEL, OPENROUTER_BACKUP_MODEL];
-  }
-  return [OPENROUTER_BACKUP_MODEL, OPENROUTER_PRIMARY_MODEL];
-};
+const getOpenRouterAttemptOrder = (requestedModel: string): string[] =>
+  getPrimaryBackupAttemptOrder(requestedModel, OPENROUTER_PRIMARY_MODEL, OPENROUTER_BACKUP_MODEL);
 
 const dedupeKeywords = (value: unknown): string[] => {
   if (!Array.isArray(value)) return [];
@@ -428,17 +407,13 @@ export async function onRequestPost(context: any): Promise<Response> {
   const env = context.env as Env;
   const requestId = request.headers.get("cf-ray") || crypto.randomUUID();
 
-  const contentLength = Number(request.headers.get("content-length") || "0");
-  if (contentLength > MAX_BODY_BYTES) {
-    return error(413, "BAD_REQUEST", "Request body is too large.", "BODY_TOO_LARGE");
+  const parsedBody = await parseJsonBodyWithLimit<any>(request, MAX_BODY_BYTES);
+  if (parsedBody.ok === false) {
+    return parsedBody.reason === "BODY_TOO_LARGE"
+      ? error(413, "BAD_REQUEST", "Request body is too large.", "BODY_TOO_LARGE")
+      : error(400, "BAD_REQUEST", "Request body must be valid JSON.", "INVALID_JSON");
   }
-
-  let body: any;
-  try {
-    body = await request.json();
-  } catch {
-    return error(400, "BAD_REQUEST", "Request body must be valid JSON.", "INVALID_JSON");
-  }
+  const body = parsedBody.body;
 
   const keywords = dedupeKeywords(body?.keywords);
   if (keywords.length === 0) {
@@ -466,18 +441,15 @@ export async function onRequestPost(context: any): Promise<Response> {
     return error(400, "BAD_REQUEST", "Field 'provider' is invalid.", "INVALID_PROVIDER");
   }
 
-  const model =
-    typeof body?.model === "string" && body.model.trim()
-      ? body.model.trim()
-      : provider === PROVIDER_OPENROUTER
-        ? OPENROUTER_PRIMARY_MODEL
-        : DEFAULT_MODEL;
+  const model = resolveRequestedModel(body?.model, provider, {
+    gemini: DEFAULT_MODEL,
+    openrouter: OPENROUTER_PRIMARY_MODEL,
+  });
 
-  if (provider === PROVIDER_GEMINI && !ALLOWED_MODELS.has(model)) {
-    return error(400, "BAD_REQUEST", "Field 'model' is invalid for provider 'gemini'.", "INVALID_MODEL");
-  }
-  if (provider === PROVIDER_OPENROUTER && !OPENROUTER_ALLOWED_MODELS.has(model)) {
-    return error(400, "BAD_REQUEST", "Field 'model' is invalid for provider 'openrouter'.", "INVALID_MODEL");
+  if (!isAllowedProviderModel(provider, model, { gemini: ALLOWED_MODELS, openrouter: OPENROUTER_ALLOWED_MODELS })) {
+    return provider === PROVIDER_GEMINI
+      ? error(400, "BAD_REQUEST", "Field 'model' is invalid for provider 'gemini'.", "INVALID_MODEL")
+      : error(400, "BAD_REQUEST", "Field 'model' is invalid for provider 'openrouter'.", "INVALID_MODEL");
   }
 
   const fallbackPlan = buildFallbackPlan(keywords, companies);
