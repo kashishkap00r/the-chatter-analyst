@@ -394,6 +394,12 @@ const App: React.FC = () => {
               >
                 Plotline
               </button>
+              <a
+                href="/tracker"
+                className="mode-tab-btn flex-1 transition mode-tab-idle text-center"
+              >
+                Tracker
+              </a>
             </div>
           </div>
         </div>
