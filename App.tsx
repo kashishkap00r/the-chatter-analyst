@@ -262,10 +262,10 @@ const App: React.FC = () => {
           <div className="flex flex-col gap-4">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div className="flex items-center gap-3">
-                <div className="brand-mark h-10 w-10 rounded-xl text-white font-serif font-bold text-xl grid place-items-center">C</div>
+                <div className="brand-mark h-10 w-10 rounded-xl text-white font-bold text-xl grid place-items-center">C</div>
                 <div>
-                  <h1 className="font-serif text-2xl leading-none">Chatter Analyst</h1>
-                  <p className="text-xs uppercase tracking-[0.15em] text-stone mt-1">Research Workflow Studio</p>
+                  <h1 className="text-2xl font-semibold leading-none">Chatter Analyst</h1>
+                  <p className="text-xs text-stone mt-1">Research Workflow Studio</p>
                 </div>
               </div>
 

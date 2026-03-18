@@ -26,14 +26,14 @@ const QuoteCard: React.FC<QuoteCardProps> = ({ quoteData, index }) => {
   };
 
   return (
-    <article className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-5 sm:p-6">
+    <article className="rounded-z-md border border-line bg-white shadow-panel studio-panel p-5 sm:p-6">
       <header className="flex items-start justify-between gap-4 mb-5">
         <div className="flex flex-wrap items-center gap-2">
           <span className="inline-flex items-center rounded-full bg-white border border-line px-2.5 py-1 text-xs font-semibold text-stone">
             Quote {index + 1}
           </span>
           <span
-            className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.08em] ${getCategoryStyle(
+            className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold ${getCategoryStyle(
               quoteData.category,
             )}`}
           >
@@ -53,12 +53,12 @@ const QuoteCard: React.FC<QuoteCardProps> = ({ quoteData, index }) => {
       </header>
 
       <section className="rounded-xl border border-brand/20 bg-brand-soft/55 p-4 mb-5">
-        <p className="text-xs font-semibold uppercase tracking-[0.15em] text-brand mb-1.5">Context</p>
+        <p className="text-xs font-semibold text-brand mb-1.5">Context</p>
         <p className="text-sm leading-relaxed text-ink/90">{quoteData.summary}</p>
       </section>
 
       <blockquote className="border-l-4 border-brand pl-4 sm:pl-5 py-1">
-        <p className="font-serif text-[1.35rem] leading-relaxed text-ink italic">"{quoteData.quote}"</p>
+        <p className="text-lg leading-relaxed text-ink italic">"{quoteData.quote}"</p>
       </blockquote>
 
       <footer className="mt-5 pt-4 border-t border-line text-right">
