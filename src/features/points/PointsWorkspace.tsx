@@ -31,13 +31,13 @@ export const PointsWorkspace: React.FC<PointsWorkspaceProps> = ({ feature, disab
   return (
     <>
       <section className="lg:col-span-5 lg:sticky lg:top-24 self-start">
-        <div className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-5 sm:p-6">
+        <div className="rounded-z-md border border-line bg-white shadow-panel studio-panel p-5 sm:p-6">
           <header className="mb-5">
-            <p className="text-xs uppercase tracking-[0.16em] text-stone font-semibold">Input Desk</p>
-            <h2 className="font-serif text-2xl mt-1">Presentation Input</h2>
+            <p className="text-xs text-stone font-semibold">Input Desk</p>
+            <h2 className="text-2xl mt-1">Presentation Input</h2>
           </header>
 
-          <div className="relative rounded-xl border-2 border-dashed border-line bg-canvas/45 px-4 py-7 text-center hover:border-brand/45 transition-colors">
+          <div className="relative rounded-z-md border-2 border-dashed border-line bg-brand-soft px-4 py-7 text-center hover:border-line transition-colors">
             <p className="text-sm font-medium text-stone">Drop or select presentation files</p>
             <p className="text-xs text-stone/80 mt-1">PDF only, batch supported</p>
             <input
@@ -53,13 +53,13 @@ export const PointsWorkspace: React.FC<PointsWorkspaceProps> = ({ feature, disab
 
           <div className="mt-4 space-y-2 max-h-[320px] overflow-y-auto pr-1 thin-scrollbar">
             {pointsBatchFiles.length === 0 && (
-              <div className="rounded-xl border border-line bg-canvas px-4 py-5 text-center text-sm text-stone">
+              <div className="rounded-z-md border border-line bg-canvas px-4 py-5 text-center text-sm text-stone">
                 No presentation files queued yet.
               </div>
             )}
 
             {pointsBatchFiles.map((file) => (
-              <div key={file.id} className="rounded-xl border border-line bg-white px-3 py-3">
+              <div key={file.id} className="rounded-z-md border border-line bg-white px-3 py-3">
                 <div className="flex items-start gap-3">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-semibold text-ink truncate">{file.result?.companyName || file.name}</p>
@@ -73,7 +73,7 @@ export const PointsWorkspace: React.FC<PointsWorkspaceProps> = ({ feature, disab
                     )}
                   </div>
                   <span
-                    className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.09em] ${
+                    className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
                       statusStyles[file.status]
                     }`}
                   >
@@ -112,7 +112,7 @@ export const PointsWorkspace: React.FC<PointsWorkspaceProps> = ({ feature, disab
             <button
               onClick={clearPoints}
               disabled={isPointsLoading || disabled}
-              className="px-4 py-2.5 rounded-xl border border-line text-sm font-semibold text-stone hover:text-ink disabled:opacity-50"
+              className="px-4 py-2.5 rounded-z-md border border-line text-sm font-semibold text-stone hover:text-ink disabled:opacity-50"
             >
               Clear
             </button>
@@ -121,7 +121,7 @@ export const PointsWorkspace: React.FC<PointsWorkspaceProps> = ({ feature, disab
                 void handleAnalyzePointsBatch();
               }}
               disabled={pointsReadyCount === 0 || isPointsLoading || disabled}
-              className="flex-1 rounded-xl bg-brand text-white text-sm font-semibold py-2.5 px-4 disabled:opacity-50 hover:bg-brand/90 transition"
+              className="flex-1 rounded-z-md bg-brand text-white text-sm font-semibold py-2.5 px-4 disabled:opacity-50 hover:bg-brand/90 transition"
             >
               {isPointsLoading ? 'Processing Batch...' : `Analyze ${pointsReadyCount} File${pointsReadyCount === 1 ? '' : 's'}`}
             </button>
@@ -131,7 +131,7 @@ export const PointsWorkspace: React.FC<PointsWorkspaceProps> = ({ feature, disab
 
       <section className="lg:col-span-7 space-y-6">
         {completedPointsResults.length > 0 && (
-          <div className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="rounded-z-md border border-line bg-white shadow-panel studio-panel p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <p className="text-sm text-stone">
               {completedPointsResults.length} compan{completedPointsResults.length === 1 ? 'y' : 'ies'} ready for Points export.
             </p>
@@ -139,7 +139,7 @@ export const PointsWorkspace: React.FC<PointsWorkspaceProps> = ({ feature, disab
               onClick={() => {
                 void handleCopyAllPoints();
               }}
-              className={`inline-flex items-center justify-center rounded-xl border px-4 py-2 text-sm font-semibold transition ${
+              className={`inline-flex items-center justify-center rounded-z-md border px-4 py-2 text-sm font-semibold transition ${
                 pointsCopyAllStatus === 'copied'
                   ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
                   : 'border-brand bg-brand text-white hover:bg-brand/90'
@@ -151,7 +151,7 @@ export const PointsWorkspace: React.FC<PointsWorkspaceProps> = ({ feature, disab
         )}
 
         {pointsCopyAllStatus === 'error' && pointsCopyAllErrorMessage && (
-          <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{pointsCopyAllErrorMessage}</div>
+          <div className="rounded-z-md border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{pointsCopyAllErrorMessage}</div>
         )}
 
         {isPointsLoading && (
@@ -173,8 +173,8 @@ export const PointsWorkspace: React.FC<PointsWorkspaceProps> = ({ feature, disab
         )}
 
         {completedPointsResults.length === 0 && !isPointsLoading && (
-          <div className="studio-empty rounded-2xl border border-dashed border-line bg-white/70 p-10 text-center shadow-panel">
-            <h3 className="font-serif text-2xl text-ink">Ready to analyze a presentation</h3>
+          <div className="studio-empty rounded-z-md border border-dashed border-line bg-white/70 p-10 text-center shadow-panel">
+            <h3 className="text-2xl text-ink">Ready to analyze a presentation</h3>
             <p className="text-sm text-stone mt-2">
               Upload one or more investor decks and we will surface the most meaningful long-term insight slides.
             </p>
@@ -186,7 +186,7 @@ export const PointsWorkspace: React.FC<PointsWorkspaceProps> = ({ feature, disab
           .map((file) => (
             <div key={file.id} className="space-y-5">
               <header>
-                <h2 className="font-serif text-3xl text-ink">{file.result?.companyName}</h2>
+                <h2 className="text-3xl text-ink">{file.result?.companyName}</h2>
                 <p className="text-sm text-stone">
                   {file.result?.fiscalPeriod} | {file.result?.marketCapCategory} | {file.result?.industry}
                 </p>
