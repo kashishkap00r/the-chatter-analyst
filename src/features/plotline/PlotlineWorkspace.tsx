@@ -39,14 +39,14 @@ export const PlotlineWorkspace: React.FC<PlotlineWorkspaceProps> = ({ feature, d
   return (
     <>
       <section className="lg:col-span-5 lg:sticky lg:top-24 self-start">
-        <div className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-5 sm:p-6">
+        <div className="rounded-z-md border border-line bg-white shadow-panel studio-panel p-5 sm:p-6">
           <header className="mb-5">
-            <p className="text-xs uppercase tracking-[0.16em] text-stone font-semibold">Input Desk</p>
-            <h2 className="font-serif text-2xl mt-1">Plotline Input</h2>
+            <p className="text-xs text-stone font-semibold">Input Desk</p>
+            <h2 className="text-2xl mt-1">Plotline Input</h2>
           </header>
 
-          <div className="rounded-xl border border-line bg-canvas/45 p-4 mb-4">
-            <label className="block text-xs uppercase tracking-[0.14em] text-stone font-semibold mb-2">Theme Keywords</label>
+          <div className="rounded-z-md border border-line bg-brand-soft p-4 mb-4">
+            <label className="block text-xs text-stone font-semibold mb-2">Theme Keywords</label>
             <input
               value={plotlineKeywordInput}
               onChange={(event) => setPlotlineKeywordInput(event.target.value)}
@@ -54,20 +54,20 @@ export const PlotlineWorkspace: React.FC<PlotlineWorkspaceProps> = ({ feature, d
               onBlur={handlePlotlineKeywordInputBlur}
               disabled={disabled}
               placeholder="Add keywords (press Enter or comma)"
-              className="w-full rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:ring-2 focus:ring-brand/35"
+              className="w-full rounded-z-sm border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:ring-2 focus:ring-brand/35"
             />
             <div className="mt-3 flex flex-wrap gap-2">
               {plotlineKeywords.length === 0 && <p className="text-xs text-stone">Add at least one keyword to run Plotline.</p>}
               {plotlineKeywords.map((keyword) => (
                 <span
                   key={keyword}
-                  className="inline-flex items-center gap-2 rounded-full border border-brand/30 bg-brand-soft px-3 py-1 text-xs font-semibold text-brand"
+                  className="inline-flex items-center gap-2 rounded-full border border-line bg-brand-soft px-3 py-1 text-xs font-semibold text-brand"
                 >
                   {keyword}
                   <button
                     onClick={() => removePlotlineKeyword(keyword)}
                     disabled={disabled || isPlotlineLoading}
-                    className="text-brand/75 hover:text-ink"
+                    className="text-brand hover:text-ink"
                     aria-label={`Remove ${keyword}`}
                     title="Remove keyword"
                   >
@@ -79,7 +79,7 @@ export const PlotlineWorkspace: React.FC<PlotlineWorkspaceProps> = ({ feature, d
             <p className="mt-2 text-[11px] text-stone">{plotlineKeywords.length}/{PLOTLINE_MAX_KEYWORDS} keywords</p>
           </div>
 
-          <div className="relative rounded-xl border-2 border-dashed border-line bg-canvas/45 px-4 py-7 text-center hover:border-brand/45 transition-colors">
+          <div className="relative rounded-z-md border-2 border-dashed border-line bg-brand-soft px-4 py-7 text-center hover:border-brand/45 transition-colors">
             <p className="text-sm font-medium text-stone">Drop or select transcript files</p>
             <p className="text-xs text-stone/80 mt-1">Supports PDF and TXT</p>
             <input
@@ -97,13 +97,13 @@ export const PlotlineWorkspace: React.FC<PlotlineWorkspaceProps> = ({ feature, d
 
           <div className="mt-4 space-y-2 max-h-[320px] overflow-y-auto pr-1 thin-scrollbar">
             {plotlineBatchFiles.length === 0 && (
-              <div className="rounded-xl border border-line bg-canvas px-4 py-5 text-center text-sm text-stone">
+              <div className="rounded-z-md border border-line bg-canvas px-4 py-5 text-center text-sm text-stone">
                 No Plotline files queued yet.
               </div>
             )}
 
             {plotlineBatchFiles.map((file) => (
-              <div key={file.id} className="rounded-xl border border-line bg-white px-3 py-3">
+              <div key={file.id} className="rounded-z-md border border-line bg-white px-3 py-3">
                 <div className="flex items-start gap-3">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-semibold text-ink truncate">{file.result?.companyName || file.name}</p>
@@ -117,7 +117,7 @@ export const PlotlineWorkspace: React.FC<PlotlineWorkspaceProps> = ({ feature, d
                     )}
                   </div>
                   <span
-                    className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.09em] ${
+                    className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
                       statusStyles[file.status]
                     }`}
                   >
@@ -156,7 +156,7 @@ export const PlotlineWorkspace: React.FC<PlotlineWorkspaceProps> = ({ feature, d
             <button
               onClick={clearPlotline}
               disabled={isPlotlineLoading || disabled}
-              className="px-4 py-2.5 rounded-xl border border-line text-sm font-semibold text-stone hover:text-ink disabled:opacity-50"
+              className="px-4 py-2.5 rounded-z-md border border-line text-sm font-semibold text-stone hover:text-ink disabled:opacity-50"
             >
               Clear
             </button>
@@ -165,7 +165,7 @@ export const PlotlineWorkspace: React.FC<PlotlineWorkspaceProps> = ({ feature, d
                 void handleAnalyzePlotlineBatch();
               }}
               disabled={plotlineReadyCount === 0 || plotlineKeywords.length === 0 || isPlotlineLoading || disabled}
-              className="flex-1 rounded-xl bg-brand text-white text-sm font-semibold py-2.5 px-4 disabled:opacity-50 hover:bg-brand/90 transition"
+              className="flex-1 rounded-z-md bg-brand text-white text-sm font-semibold py-2.5 px-4 disabled:opacity-50 hover:bg-brand/90 transition"
             >
               {isPlotlineLoading
                 ? 'Processing Batch...'
@@ -177,7 +177,7 @@ export const PlotlineWorkspace: React.FC<PlotlineWorkspaceProps> = ({ feature, d
 
       <section className="lg:col-span-7 space-y-6">
         {plotlineCompanyCount > 0 && (
-          <div className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="rounded-z-md border border-line bg-white shadow-panel studio-panel p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <p className="text-sm text-stone">
               {plotlineCompanyCount} compan{plotlineCompanyCount === 1 ? 'y' : 'ies'} included in the current Plotline story.
             </p>
@@ -185,7 +185,7 @@ export const PlotlineWorkspace: React.FC<PlotlineWorkspaceProps> = ({ feature, d
               onClick={() => {
                 void handleCopyAllPlotline();
               }}
-              className={`inline-flex items-center justify-center rounded-xl border px-4 py-2 text-sm font-semibold transition ${
+              className={`inline-flex items-center justify-center rounded-z-md border px-4 py-2 text-sm font-semibold transition ${
                 plotlineCopyAllStatus === 'copied'
                   ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
                   : 'border-brand bg-brand text-white hover:bg-brand/90'
@@ -197,7 +197,7 @@ export const PlotlineWorkspace: React.FC<PlotlineWorkspaceProps> = ({ feature, d
         )}
 
         {plotlineCopyAllStatus === 'error' && plotlineCopyAllErrorMessage && (
-          <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{plotlineCopyAllErrorMessage}</div>
+          <div className="rounded-z-md border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{plotlineCopyAllErrorMessage}</div>
         )}
 
         {isPlotlineLoading && (
@@ -219,14 +219,14 @@ export const PlotlineWorkspace: React.FC<PlotlineWorkspaceProps> = ({ feature, d
         )}
 
         {!isPlotlineLoading && plotlineSummary && plotlineSummary.sections.length === 0 && (
-          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          <div className="rounded-z-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
             No keyword matches were found across the uploaded transcripts. Try broader or alternate keywords.
           </div>
         )}
 
         {!isPlotlineLoading && !plotlineSummary && (
-          <div className="studio-empty rounded-2xl border border-dashed border-line bg-white/70 p-10 text-center shadow-panel">
-            <h3 className="font-serif text-2xl text-ink">Ready for Plotline</h3>
+          <div className="studio-empty rounded-z-md border border-dashed border-line bg-white/70 p-10 text-center shadow-panel">
+            <h3 className="text-2xl text-ink">Ready for Plotline</h3>
             <p className="text-sm text-stone mt-2">
               Upload transcript files, add target keywords, and generate cross-company plotline evidence with synthesis.
             </p>
@@ -234,18 +234,18 @@ export const PlotlineWorkspace: React.FC<PlotlineWorkspaceProps> = ({ feature, d
         )}
 
         {plotlineSummary && (
-          <div className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-5 sm:p-6">
-            <h3 className="font-serif text-2xl text-ink">{plotlineSummary.title}</h3>
+          <div className="rounded-z-md border border-line bg-white shadow-panel studio-panel p-5 sm:p-6">
+            <h3 className="text-2xl text-ink">{plotlineSummary.title}</h3>
             <p className="mt-2 text-sm text-stone leading-relaxed">{plotlineSummary.dek}</p>
           </div>
         )}
 
         {plotlineSummary?.sections.map((section, index) => {
           return (
-            <div key={section.companyKey} className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-5 sm:p-6 space-y-5">
+            <div key={section.companyKey} className="rounded-z-md border border-line bg-white shadow-panel studio-panel p-5 sm:p-6 space-y-5">
               <header>
-                <p className="text-xs font-semibold uppercase tracking-[0.09em] text-stone">Section {index + 1}</p>
-                <h2 className="font-serif text-3xl text-ink">{section.companyName}</h2>
+                <p className="text-xs font-semibold text-stone">Section {index + 1}</p>
+                <h2 className="text-3xl text-ink">{section.companyName}</h2>
                 <p className="text-sm text-stone">{section.subhead}</p>
               </header>
 
@@ -253,7 +253,7 @@ export const PlotlineWorkspace: React.FC<PlotlineWorkspaceProps> = ({ feature, d
                 {section.narrativeParagraphs.map((paragraph, paragraphIndex) => (
                   <p
                     key={`${section.companyKey}-paragraph-${paragraphIndex}`}
-                    className="rounded-xl border border-brand/20 bg-brand-soft/60 px-4 py-3 text-sm leading-relaxed text-ink"
+                    className="rounded-z-md border border-line bg-brand-soft px-4 py-3 text-sm leading-relaxed text-ink"
                   >
                     {paragraph}
                   </p>
@@ -262,8 +262,8 @@ export const PlotlineWorkspace: React.FC<PlotlineWorkspaceProps> = ({ feature, d
 
               <div className="space-y-4">
                 {section.quoteBlocks.map((quote, quoteIndex) => (
-                  <article key={`${section.companyKey}-${quoteIndex}`} className="rounded-xl border border-line bg-canvas/45 px-4 py-4">
-                    <p className="text-xs font-semibold uppercase tracking-[0.08em] text-stone">{quote.periodLabel}</p>
+                  <article key={`${section.companyKey}-${quoteIndex}`} className="rounded-z-md border border-line bg-brand-soft px-4 py-4">
+                    <p className="text-xs font-semibold text-stone">{quote.periodLabel}</p>
                     <blockquote className="mt-2 text-[15px] leading-relaxed italic text-ink">"{quote.quote}"</blockquote>
                     <p className="mt-2 text-xs text-stone italic">
                       - {quote.speakerName}, {quote.speakerDesignation}
@@ -276,8 +276,8 @@ export const PlotlineWorkspace: React.FC<PlotlineWorkspaceProps> = ({ feature, d
         })}
 
         {plotlineSummary && plotlineSummary.closingWatchlist.length > 0 && (
-          <div className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-5 sm:p-6">
-            <h3 className="font-serif text-2xl text-ink">What To Watch</h3>
+          <div className="rounded-z-md border border-line bg-white shadow-panel studio-panel p-5 sm:p-6">
+            <h3 className="text-2xl text-ink">What To Watch</h3>
             <ul className="mt-4 space-y-2 list-disc pl-5 text-sm text-stone leading-relaxed">
               {plotlineSummary.closingWatchlist.map((line, index) => (
                 <li key={`plotline-watch-${index}`}>{line}</li>
@@ -287,7 +287,7 @@ export const PlotlineWorkspace: React.FC<PlotlineWorkspaceProps> = ({ feature, d
         )}
 
         {plotlineSummary && plotlineSummary.skippedCompanies.length > 0 && (
-          <div className="rounded-xl border border-line bg-white/70 px-4 py-3 text-xs text-stone">
+          <div className="rounded-z-md border border-line bg-white/70 px-4 py-3 text-xs text-stone">
             Skipped for weak evidence: {plotlineSummary.skippedCompanies.join(', ')}
           </div>
         )}
