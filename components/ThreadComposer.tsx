@@ -516,11 +516,11 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
     return (
       <div
         key={quote.id}
-        className={`rounded-xl border p-3 ${isSelected ? "border-brand/50 bg-brand-soft/25" : "border-line bg-canvas/25"}`}
+        className={`rounded-z-md border p-3 ${isSelected ? "border-brand bg-brand-soft" : "border-line bg-brand-soft"}`}
       >
         <div className="flex items-start justify-between gap-3 mb-2">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="text-xs uppercase tracking-[0.12em] text-stone">
+            <p className="text-xs text-stone">
               {options?.badgeLabel || `Insight ${quote.sourceOrder}`}
             </p>
             <span className="rounded-full border border-line bg-white px-2 py-0.5 text-[11px] font-semibold text-stone">
@@ -530,7 +530,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
           <button
             onClick={() => toggleQuoteSelection(quote.id)}
             disabled={disabled}
-            className={`rounded-lg border px-3 py-1 text-xs font-semibold transition ${
+            className={`rounded-z-sm border px-3 py-1 text-xs font-semibold transition ${
               isSelected
                 ? "border-brand bg-brand text-white"
                 : "border-line bg-white text-stone hover:text-ink"
@@ -540,7 +540,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
           </button>
         </div>
 
-        <p className="text-sm text-ink/90 mb-2">{quote.summary}</p>
+        <p className="text-sm text-ink mb-2">{quote.summary}</p>
         <blockquote className="border-l-4 border-brand pl-3">
           <p className="text-sm italic text-ink">"{quote.quote}"</p>
         </blockquote>
@@ -550,12 +550,12 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
   };
 
   return (
-    <section className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-5 sm:p-6 space-y-5">
+    <section className="rounded-z-md border border-line bg-white shadow-panel studio-panel p-5 sm:p-6 space-y-5">
       <header className="space-y-2">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-xs uppercase tracking-[0.16em] text-stone font-semibold">Distribution Desk</p>
-            <h3 className="font-serif text-2xl text-ink">Thread Composer (X)</h3>
+            <p className="text-xs text-stone font-semibold">Distribution Desk</p>
+            <h3 className="text-2xl text-ink">Thread Composer (X)</h3>
           </div>
           <div className="flex items-center gap-2">
             <span className="studio-badge rounded-full px-3 py-1 text-xs font-semibold">
@@ -564,7 +564,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
             <button
               onClick={resetComposer}
               disabled={disabled}
-              className="rounded-lg border border-line bg-white px-3 py-1 text-xs font-semibold text-stone hover:text-ink disabled:opacity-50"
+              className="rounded-z-sm border border-line bg-white px-3 py-1 text-xs font-semibold text-stone hover:text-ink disabled:opacity-50"
             >
               Reset
             </button>
@@ -581,19 +581,19 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
           onChange={(event) => setSubstackUrl(event.target.value)}
           disabled={disabled || ingestStatus === "loading"}
           placeholder="https://thechatter.zerodha.com/p/..."
-          className="w-full rounded-xl border border-line bg-canvas/40 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-brand/35"
+          className="w-full rounded-z-md border border-line bg-brand-soft px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-brand"
         />
         <button
           onClick={handleLoadFromUrl}
           disabled={disabled || ingestStatus === "loading" || !substackUrl.trim()}
-          className="rounded-xl border border-brand bg-brand px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50 hover:bg-brand/90"
+          className="rounded-z-md border border-brand bg-brand px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50 hover:bg-brand/90"
         >
           {ingestStatus === "loading" ? "Loading..." : "Load Edition"}
         </button>
         <button
           onClick={() => pdfInputRef.current?.click()}
           disabled={disabled || ingestStatus === "loading"}
-          className="rounded-xl border border-line bg-white px-4 py-2.5 text-sm font-semibold text-stone disabled:opacity-50 hover:text-ink"
+          className="rounded-z-md border border-line bg-white px-4 py-2.5 text-sm font-semibold text-stone disabled:opacity-50 hover:text-ink"
         >
           PDF Fallback
         </button>
@@ -608,11 +608,11 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
       </div>
 
       {ingestError && (
-        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{ingestError}</div>
+        <div className="rounded-z-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{ingestError}</div>
       )}
 
       {source && (
-        <div className="rounded-xl border border-line bg-canvas/35 px-4 py-3 text-sm text-stone flex flex-wrap items-center justify-between gap-2">
+        <div className="rounded-z-md border border-line bg-brand-soft px-4 py-3 text-sm text-stone flex flex-wrap items-center justify-between gap-2">
           <p>
             <span className="font-semibold text-ink">{source.editionTitle}</span>
             {source.editionDate ? ` • ${source.editionDate}` : ""}
@@ -625,9 +625,9 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
       )}
 
       {(source || hasGeneratedThread) && (
-        <div className="sticky top-4 z-10 rounded-xl border border-line bg-white/92 px-3 py-2 backdrop-blur studio-panel">
+        <div className="sticky top-4 z-10 rounded-z-md border border-line bg-white/92 px-3 py-2 backdrop-blur studio-panel">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="inline-flex rounded-lg border border-line bg-canvas p-1">
+            <div className="inline-flex rounded-z-sm border border-line bg-canvas p-1">
               <button
                 onClick={() => setComposerView("selection")}
                 className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
@@ -669,28 +669,28 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
               <button
                 onClick={selectTopShortlist}
                 disabled={disabled || shortlistStatus !== "ready" || shortlistedCount === 0}
-                className="rounded-lg border border-line bg-white px-3 py-1.5 text-xs font-semibold text-stone disabled:opacity-50 hover:text-ink"
+                className="rounded-z-sm border border-line bg-white px-3 py-1.5 text-xs font-semibold text-stone disabled:opacity-50 hover:text-ink"
               >
                 Select Top 25
               </button>
               <button
                 onClick={selectAllQuotes}
                 disabled={disabled || totalQuoteCount === 0}
-                className="rounded-lg border border-line bg-white px-3 py-1.5 text-xs font-semibold text-stone disabled:opacity-50 hover:text-ink"
+                className="rounded-z-sm border border-line bg-white px-3 py-1.5 text-xs font-semibold text-stone disabled:opacity-50 hover:text-ink"
               >
                 Select Universe
               </button>
               <button
                 onClick={clearSelectedQuotes}
                 disabled={disabled || selectedCount === 0}
-                className="rounded-lg border border-line bg-white px-3 py-1.5 text-xs font-semibold text-stone disabled:opacity-50 hover:text-ink"
+                className="rounded-z-sm border border-line bg-white px-3 py-1.5 text-xs font-semibold text-stone disabled:opacity-50 hover:text-ink"
               >
                 Clear Selection
               </button>
               <button
                 onClick={handleGenerateThread}
                 disabled={disabled || selectedCount === 0 || threadStatus === "loading"}
-                className="rounded-lg border border-brand bg-brand px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50 hover:bg-brand/90"
+                className="rounded-z-sm border border-brand bg-brand px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50 hover:bg-brand/90"
               >
                 {threadStatus === "loading" ? "Generating..." : `Generate Thread (${selectedCount})`}
               </button>
@@ -698,35 +698,35 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
           </div>
 
           {threadError && (
-            <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{threadError}</div>
+            <div className="rounded-z-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{threadError}</div>
           )}
 
           {shortlistStatus === "loading" && (
-            <div className="rounded-xl border border-brand/30 bg-brand-soft/30 px-4 py-3 text-sm text-brand">
+            <div className="rounded-z-md border border-line bg-brand-soft px-4 py-3 text-sm text-brand">
               Building AI-picked Top 25 candidate universe...
             </div>
           )}
 
           {shortlistError && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            <div className="rounded-z-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
               Top 25 shortlist could not be generated: {shortlistError}
             </div>
           )}
 
-          <article className="rounded-xl border border-line bg-white p-4">
+          <article className="rounded-z-md border border-line bg-white p-4">
             <header className="mb-3">
-              <h4 className="font-serif text-xl text-ink">Top 25 Candidates (AI-picked)</h4>
+              <h4 className="text-xl text-ink">Top 25 Candidates (AI-picked)</h4>
               <p className="text-sm text-stone">
                 Start from this smaller universe, then add any missed quotes from the full universe below.
               </p>
             </header>
 
             {shortlistStatus === "loading" ? (
-              <div className="studio-empty rounded-lg border border-dashed border-line bg-canvas/30 px-4 py-6 text-sm text-stone text-center">
+              <div className="studio-empty rounded-z-sm border border-dashed border-line bg-brand-soft px-4 py-6 text-sm text-stone text-center">
                 Building candidate shortlist...
               </div>
             ) : shortlistedQuotes.length === 0 ? (
-              <div className="studio-empty rounded-lg border border-dashed border-line bg-canvas/30 px-4 py-6 text-sm text-stone text-center">
+              <div className="studio-empty rounded-z-sm border border-dashed border-line bg-brand-soft px-4 py-6 text-sm text-stone text-center">
                 No shortlist candidates available yet. You can still choose from the full universe below.
               </div>
             ) : (
@@ -738,9 +738,9 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
             )}
           </article>
 
-          <article className="rounded-xl border border-line bg-white p-4">
+          <article className="rounded-z-md border border-line bg-white p-4">
             <header className="mb-3">
-              <h4 className="font-serif text-xl text-ink">Full Universe (Manual Additions)</h4>
+              <h4 className="text-xl text-ink">Full Universe (Manual Additions)</h4>
               <p className="text-sm text-stone">
                 Add any quote you had in mind that did not make the Top 25 shortlist.
               </p>
@@ -748,9 +748,9 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
 
             <div className="space-y-4 max-h-[560px] overflow-y-auto pr-1 thin-scrollbar">
               {source.companies.map((company) => (
-                <article key={`${company.companyName}-${company.industry}`} className="rounded-xl border border-line bg-canvas/20 p-4">
+                <article key={`${company.companyName}-${company.industry}`} className="rounded-z-md border border-line bg-brand-soft p-4">
                   <header className="mb-3">
-                    <h5 className="font-serif text-lg text-ink">{company.companyName}</h5>
+                    <h5 className="text-lg text-ink">{company.companyName}</h5>
                     <p className="text-xs text-stone">
                       {company.marketCapCategory} | {company.industry}
                     </p>
@@ -768,36 +768,36 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
 
       {composerView === "results" && (
         <div className="space-y-4">
-          <div className="rounded-xl border border-line bg-white px-4 py-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="rounded-z-md border border-line bg-white px-4 py-3 flex flex-wrap items-center justify-between gap-2">
             <p className="text-sm text-stone">
               Generated output is isolated here to keep quote selection uncluttered.
             </p>
             <button
               onClick={() => setComposerView("selection")}
-              className="rounded-lg border border-line bg-white px-3 py-1.5 text-xs font-semibold text-stone hover:text-ink"
+              className="rounded-z-sm border border-line bg-white px-3 py-1.5 text-xs font-semibold text-stone hover:text-ink"
             >
               Back to Selection
             </button>
           </div>
 
           {!hasGeneratedThread && (
-            <div className="studio-empty rounded-xl border border-dashed border-line bg-canvas/30 px-4 py-8 text-center text-sm text-stone">
+            <div className="studio-empty rounded-z-md border border-dashed border-line bg-brand-soft px-4 py-8 text-center text-sm text-stone">
               No generated thread yet. Select quotes and click Generate Thread to populate this view.
             </div>
           )}
 
           {threadError && (
-            <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{threadError}</div>
+            <div className="rounded-z-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{threadError}</div>
           )}
 
           {hasGeneratedThread && (
             <>
-          <div className="rounded-xl border border-line bg-canvas/30 px-4 py-3 text-sm text-stone">
+          <div className="rounded-z-md border border-line bg-brand-soft px-4 py-3 text-sm text-stone">
             {tweets.length} tweet blocks ready. For insight tweets, Copy Tweet attempts text + image together; Download PNG is always available.
           </div>
 
           {imageActionError && (
-            <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{imageActionError}</div>
+            <div className="rounded-z-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{imageActionError}</div>
           )}
 
           <div className="space-y-4">
@@ -807,13 +807,13 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
               const imageData = tweet.quoteId ? getImageForQuote(tweet.quoteId) : null;
 
               return (
-                <article key={tweet.id} className="rounded-2xl border border-line bg-white p-4 sm:p-5 space-y-4">
+                <article key={tweet.id} className="rounded-z-md border border-line bg-white p-4 sm:p-5 space-y-4">
                   <header className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
                       <span className="rounded-full border border-line bg-canvas px-2.5 py-1 text-xs font-semibold text-stone">
                         Tweet {tweetNumber}
                       </span>
-                      <span className="rounded-full border border-brand/25 bg-brand-soft/40 px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.08em] text-brand">
+                      <span className="rounded-full border border-line bg-brand-soft px-2.5 py-1 text-xs font-semibold text-brand">
                         {tweet.kind}
                       </span>
                     </div>
@@ -821,14 +821,14 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => handleCopyTweet(tweet, tweetNumber)}
-                        className="rounded-lg border border-line bg-white px-3 py-1.5 text-xs font-semibold text-stone hover:text-ink"
+                        className="rounded-z-sm border border-line bg-white px-3 py-1.5 text-xs font-semibold text-stone hover:text-ink"
                       >
                         {tweet.kind === "insight" ? "Copy Tweet + Image" : "Copy Tweet"}
                       </button>
                       <button
                         onClick={() => handleRegenerateTweet(tweet)}
                         disabled={busyTweetId === tweet.id}
-                        className="rounded-lg border border-brand bg-brand px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50 hover:bg-brand/90"
+                        className="rounded-z-sm border border-brand bg-brand px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50 hover:bg-brand/90"
                       >
                         {busyTweetId === tweet.id ? "Regenerating..." : "Regenerate"}
                       </button>
@@ -842,15 +842,15 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
                   )}
 
                   {tweet.kind === "insight" && quote && (
-                    <div className="rounded-xl border border-line bg-canvas/20 p-3 space-y-3">
+                    <div className="rounded-z-md border border-line bg-brand-soft p-3 space-y-3">
                       {imageData ? (
                         <img
                           src={imageData}
                           alt={`Quote card for ${quote.companyName}`}
-                          className="w-full rounded-lg border border-line object-cover"
+                          className="w-full rounded-z-sm border border-line object-cover"
                         />
                       ) : (
-                        <div className="rounded-lg border border-dashed border-line bg-white px-4 py-8 text-center text-xs text-stone">
+                        <div className="rounded-z-sm border border-dashed border-line bg-white px-4 py-8 text-center text-xs text-stone">
                           Image preview unavailable for this quote.
                         </div>
                       )}
@@ -859,14 +859,14 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ provider, model, disabl
                         <button
                           onClick={() => handleCopyImage(tweet, tweetNumber)}
                           disabled={!imageData || imageActionBusy === tweet.id}
-                          className="rounded-lg border border-line bg-white px-3 py-1.5 text-xs font-semibold text-stone disabled:opacity-50 hover:text-ink"
+                          className="rounded-z-sm border border-line bg-white px-3 py-1.5 text-xs font-semibold text-stone disabled:opacity-50 hover:text-ink"
                         >
                           {imageActionBusy === tweet.id ? "Copying..." : "Copy Image"}
                         </button>
                         <button
                           onClick={() => handleDownloadImage(tweet, tweetNumber)}
                           disabled={!imageData}
-                          className="rounded-lg border border-line bg-white px-3 py-1.5 text-xs font-semibold text-stone disabled:opacity-50 hover:text-ink"
+                          className="rounded-z-sm border border-line bg-white px-3 py-1.5 text-xs font-semibold text-stone disabled:opacity-50 hover:text-ink"
                         >
                           Download PNG
                         </button>

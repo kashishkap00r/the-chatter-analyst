@@ -50,17 +50,17 @@ export const ChatterWorkspace: React.FC<ChatterWorkspaceProps> = ({
   return (
     <>
       <section className="lg:col-span-5 lg:sticky lg:top-24 self-start">
-        <div className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-5 sm:p-6">
+        <div className="rounded-z-md border border-line bg-white shadow-panel studio-panel p-5 sm:p-6">
           <header className="mb-5">
-            <p className="text-xs uppercase tracking-[0.16em] text-stone font-semibold">Input Desk</p>
-            <h2 className="font-serif text-2xl mt-1">Transcript Input</h2>
+            <p className="text-xs text-stone font-semibold">Input Desk</p>
+            <h2 className="text-2xl mt-1">Transcript Input</h2>
           </header>
 
-          <div className="inline-flex rounded-xl border border-line bg-canvas p-1 mb-4 w-full">
+          <div className="inline-flex rounded-z-md border border-line bg-canvas p-1 mb-4 w-full">
             <button
               onClick={() => setInputMode('file')}
               disabled={disabled}
-              className={`flex-1 rounded-lg py-2 text-sm font-semibold transition ${
+              className={`flex-1 rounded-z-sm py-2 text-sm font-semibold transition ${
                 inputMode === 'file' ? 'bg-white text-ink shadow-sm' : 'text-stone hover:text-ink'
               } disabled:opacity-50`}
             >
@@ -69,7 +69,7 @@ export const ChatterWorkspace: React.FC<ChatterWorkspaceProps> = ({
             <button
               onClick={() => setInputMode('text')}
               disabled={disabled}
-              className={`flex-1 rounded-lg py-2 text-sm font-semibold transition ${
+              className={`flex-1 rounded-z-sm py-2 text-sm font-semibold transition ${
                 inputMode === 'text' ? 'bg-white text-ink shadow-sm' : 'text-stone hover:text-ink'
               } disabled:opacity-50`}
             >
@@ -79,7 +79,7 @@ export const ChatterWorkspace: React.FC<ChatterWorkspaceProps> = ({
 
           {inputMode === 'text' ? (
             <textarea
-              className="w-full min-h-[290px] rounded-xl border border-line bg-canvas/40 p-4 text-sm leading-relaxed outline-none focus:ring-2 focus:ring-brand/40"
+              className="w-full min-h-[290px] rounded-z-md border border-line bg-brand-soft p-4 text-sm leading-relaxed outline-none focus:ring-2 focus:ring-brand"
               placeholder="Paste earnings call transcript here..."
               value={textInput}
               onChange={(event) => setTextInput(event.target.value)}
@@ -87,7 +87,7 @@ export const ChatterWorkspace: React.FC<ChatterWorkspaceProps> = ({
             />
           ) : (
             <>
-              <div className="relative rounded-xl border-2 border-dashed border-line bg-canvas/45 px-4 py-7 text-center hover:border-brand/45 transition-colors">
+              <div className="relative rounded-z-md border-2 border-dashed border-line bg-brand-soft px-4 py-7 text-center hover:border-brand transition-colors">
                 <p className="text-sm font-medium text-stone">Drop or select transcript files</p>
                 <p className="text-xs text-stone/80 mt-1">Supports PDF and TXT</p>
                 <input
@@ -105,13 +105,13 @@ export const ChatterWorkspace: React.FC<ChatterWorkspaceProps> = ({
 
               <div className="mt-4 space-y-2 max-h-[320px] overflow-y-auto pr-1 thin-scrollbar">
                 {batchFiles.length === 0 && (
-                  <div className="rounded-xl border border-line bg-canvas px-4 py-5 text-center text-sm text-stone">
+                  <div className="rounded-z-md border border-line bg-canvas px-4 py-5 text-center text-sm text-stone">
                     No files queued yet.
                   </div>
                 )}
 
                 {batchFiles.map((file) => (
-                  <div key={file.id} className="rounded-xl border border-line bg-white px-3 py-3">
+                  <div key={file.id} className="rounded-z-md border border-line bg-white px-3 py-3">
                     <div className="flex items-start gap-3">
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-semibold text-ink truncate">{file.result?.companyName || file.name}</p>
@@ -121,7 +121,7 @@ export const ChatterWorkspace: React.FC<ChatterWorkspaceProps> = ({
                         )}
                       </div>
                       <span
-                        className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.09em] ${
+                        className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
                           statusStyles[file.status]
                         }`}
                       >
@@ -162,7 +162,7 @@ export const ChatterWorkspace: React.FC<ChatterWorkspaceProps> = ({
             <button
               onClick={clearChatter}
               disabled={isChatterLoading || disabled}
-              className="px-4 py-2.5 rounded-xl border border-line text-sm font-semibold text-stone hover:text-ink disabled:opacity-50"
+              className="px-4 py-2.5 rounded-z-md border border-line text-sm font-semibold text-stone hover:text-ink disabled:opacity-50"
             >
               Clear
             </button>
@@ -172,7 +172,7 @@ export const ChatterWorkspace: React.FC<ChatterWorkspaceProps> = ({
                   void handleAnalyzeText();
                 }}
                 disabled={!textInput.trim() || isTextLoading || disabled}
-                className="flex-1 rounded-xl bg-brand text-white text-sm font-semibold py-2.5 px-4 disabled:opacity-50 hover:bg-brand/90 transition"
+                className="flex-1 rounded-z-md bg-brand text-white text-sm font-semibold py-2.5 px-4 disabled:opacity-50 hover:bg-brand/90 transition"
               >
                 {isTextLoading ? 'Analyzing...' : 'Extract Insights'}
               </button>
@@ -182,7 +182,7 @@ export const ChatterWorkspace: React.FC<ChatterWorkspaceProps> = ({
                   void handleAnalyzeBatch();
                 }}
                 disabled={readyCount === 0 || isAnalyzingBatch || disabled}
-                className="flex-1 rounded-xl bg-brand text-white text-sm font-semibold py-2.5 px-4 disabled:opacity-50 hover:bg-brand/90 transition"
+                className="flex-1 rounded-z-md bg-brand text-white text-sm font-semibold py-2.5 px-4 disabled:opacity-50 hover:bg-brand/90 transition"
               >
                 {isAnalyzingBatch ? 'Processing Batch...' : `Analyze ${readyCount} File${readyCount === 1 ? '' : 's'}`}
               </button>
@@ -192,10 +192,10 @@ export const ChatterWorkspace: React.FC<ChatterWorkspaceProps> = ({
       </section>
 
       <section className="lg:col-span-7 space-y-6">
-        <div className="inline-flex rounded-xl border border-line bg-white p-1">
+        <div className="inline-flex rounded-z-md border border-line bg-white p-1">
           <button
             onClick={() => setChatterPane('analysis')}
-            className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
+            className={`rounded-z-sm px-4 py-2 text-sm font-semibold transition ${
               chatterPane === 'analysis' ? 'bg-canvas text-ink shadow-sm' : 'text-stone hover:text-ink'
             }`}
           >
@@ -203,7 +203,7 @@ export const ChatterWorkspace: React.FC<ChatterWorkspaceProps> = ({
           </button>
           <button
             onClick={() => setChatterPane('thread')}
-            className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
+            className={`rounded-z-sm px-4 py-2 text-sm font-semibold transition ${
               chatterPane === 'thread' ? 'bg-canvas text-ink shadow-sm' : 'text-stone hover:text-ink'
             }`}
           >
@@ -216,7 +216,7 @@ export const ChatterWorkspace: React.FC<ChatterWorkspaceProps> = ({
         ) : (
           <>
             {completedResults.length > 0 && (
-              <div className="rounded-2xl border border-line bg-white shadow-panel studio-panel p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="rounded-z-md border border-line bg-white shadow-panel studio-panel p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <p className="text-sm text-stone">
                   {completedResults.length} compan{completedResults.length === 1 ? 'y' : 'ies'} ready for newsletter export.
                 </p>
@@ -224,7 +224,7 @@ export const ChatterWorkspace: React.FC<ChatterWorkspaceProps> = ({
                   onClick={() => {
                     void handleCopyAllChatter();
                   }}
-                  className={`inline-flex items-center justify-center rounded-xl border px-4 py-2 text-sm font-semibold transition ${
+                  className={`inline-flex items-center justify-center rounded-z-md border px-4 py-2 text-sm font-semibold transition ${
                     copyAllStatus === 'copied'
                       ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
                       : 'border-brand bg-brand text-white hover:bg-brand/90'
@@ -236,7 +236,7 @@ export const ChatterWorkspace: React.FC<ChatterWorkspaceProps> = ({
             )}
 
             {copyAllStatus === 'error' && copyAllErrorMessage && (
-              <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{copyAllErrorMessage}</div>
+              <div className="rounded-z-md border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{copyAllErrorMessage}</div>
             )}
 
             {isTextLoading && (
@@ -271,14 +271,14 @@ export const ChatterWorkspace: React.FC<ChatterWorkspaceProps> = ({
             )}
 
             {chatterSingleState.status === 'error' && (
-              <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+              <div className="rounded-z-md border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
                 {chatterSingleState.errorMessage}
               </div>
             )}
 
             {completedResults.length === 0 && !isChatterLoading && chatterSingleState.status !== 'error' && (
-              <div className="studio-empty rounded-2xl border border-dashed border-line bg-white/70 p-10 text-center shadow-panel">
-                <h3 className="font-serif text-2xl text-ink">Ready to analyze</h3>
+              <div className="studio-empty rounded-z-md border border-dashed border-line bg-white/70 p-10 text-center shadow-panel">
+                <h3 className="text-2xl text-ink">Ready to analyze</h3>
                 <p className="text-sm text-stone mt-2">
                   Upload transcripts or paste text, then run analysis to generate quote-ready insight cards.
                 </p>
@@ -288,7 +288,7 @@ export const ChatterWorkspace: React.FC<ChatterWorkspaceProps> = ({
             {chatterSingleState.status === 'complete' && chatterSingleState.result && (
               <div className="space-y-4">
                 <div>
-                  <h2 className="font-serif text-3xl text-ink">{chatterSingleState.result.companyName}</h2>
+                  <h2 className="text-3xl text-ink">{chatterSingleState.result.companyName}</h2>
                   <p className="text-sm text-stone">{chatterSingleState.result.fiscalPeriod}</p>
                 </div>
                 <div className="space-y-4">
@@ -304,7 +304,7 @@ export const ChatterWorkspace: React.FC<ChatterWorkspaceProps> = ({
               .map((file) => (
                 <div key={file.id} className="space-y-4">
                   <div>
-                    <h2 className="font-serif text-3xl text-ink">{file.result?.companyName}</h2>
+                    <h2 className="text-3xl text-ink">{file.result?.companyName}</h2>
                     <p className="text-sm text-stone">{file.result?.fiscalPeriod}</p>
                   </div>
                   <div className="space-y-4">
