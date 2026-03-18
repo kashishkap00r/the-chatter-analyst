@@ -17,6 +17,7 @@ import {
   PlotlineWorkspace,
   usePlotlineFeature,
 } from './src/features/plotline/plotlineFeature';
+import { TrackerPage } from './src/features/tracker';
 import {
   GEMINI_MODEL_OPTIONS,
   OPENROUTER_CHATTER_DEFAULT_TIER,
@@ -247,6 +248,10 @@ const App: React.FC = () => {
 
   const isResumePromptVisible = Boolean(pendingResumeSession);
   const isResumeDecisionPending = isResumePromptVisible && !isPersistenceReady;
+
+  if (window.location.pathname === '/tracker') {
+    return <TrackerPage />;
+  }
 
   return (
     <div className="app-shell min-h-screen text-ink relative overflow-x-hidden">
