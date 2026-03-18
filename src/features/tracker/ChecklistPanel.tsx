@@ -44,13 +44,13 @@ export const ChecklistPanel: React.FC<ChecklistPanelProps> = ({
         <h2 className="text-lg font-semibold" style={{ color: accentColor }}>
           {title}
         </h2>
-        <p className="text-sm text-gray-500">
+        <p className="text-sm text-stone">
           {covered.length}/{total} covered · {pending.length} pending
         </p>
         {total > 0 && (
-          <div className="mt-2 h-2 bg-gray-200 rounded-full overflow-hidden">
+          <div className="mt-2 h-2 bg-line rounded-z-sm overflow-hidden">
             <div
-              className="h-full rounded-full transition-all"
+              className="h-full rounded-z-sm transition-all"
               style={{
                 width: `${(covered.length / total) * 100}%`,
                 backgroundColor: accentColor,
@@ -62,20 +62,20 @@ export const ChecklistPanel: React.FC<ChecklistPanelProps> = ({
 
       {/* Pending section */}
       <div className="mb-4">
-        <h3 className="text-sm font-medium text-gray-700 mb-2">
+        <h3 className="text-sm font-medium text-ink mb-2">
           Pending ({pending.length})
         </h3>
         {pending.length === 0 ? (
-          <p className="text-sm text-gray-400 italic">All caught up!</p>
+          <p className="text-sm text-stone italic">All caught up!</p>
         ) : (
           <ul className="space-y-1">
             {pending.map((c) => (
               <li
                 key={c.symbol}
-                className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-gray-50 text-sm"
+                className="flex items-center justify-between py-1.5 px-2 rounded-z-sm hover:bg-brand-soft text-sm"
               >
-                <span className="font-medium text-gray-800">{c.name}</span>
-                <span className="text-xs text-gray-400">
+                <span className="font-medium text-ink">{c.name}</span>
+                <span className="text-xs text-stone">
                   {daysSince(checklist(c).eligible_since)}d ago
                 </span>
               </li>
@@ -88,9 +88,9 @@ export const ChecklistPanel: React.FC<ChecklistPanelProps> = ({
       <div className="mb-4">
         <button
           onClick={() => setShowCovered(!showCovered)}
-          className="text-sm font-medium text-gray-500 hover:text-gray-700 mb-2 flex items-center gap-1"
+          className="text-sm font-medium text-stone hover:text-ink mb-2 flex items-center gap-1"
         >
-          <span>{showCovered ? "▾" : "▸"}</span>
+          <span>{showCovered ? "\u25BE" : "\u25B8"}</span>
           Covered ({covered.length})
         </button>
         {showCovered && (
@@ -98,7 +98,7 @@ export const ChecklistPanel: React.FC<ChecklistPanelProps> = ({
             {covered.map((c) => (
               <li
                 key={c.symbol}
-                className="flex items-center justify-between py-1.5 px-2 rounded text-sm text-gray-400 line-through"
+                className="flex items-center justify-between py-1.5 px-2 rounded-z-sm text-sm text-stone line-through"
               >
                 <span>{c.name}</span>
                 <span className="text-xs no-underline">
@@ -114,15 +114,15 @@ export const ChecklistPanel: React.FC<ChecklistPanelProps> = ({
       <div>
         <button
           onClick={() => setShowNotReported(!showNotReported)}
-          className="text-sm font-medium text-gray-400 hover:text-gray-600 mb-2 flex items-center gap-1"
+          className="text-sm font-medium text-stone hover:text-ink mb-2 flex items-center gap-1"
         >
-          <span>{showNotReported ? "▾" : "▸"}</span>
+          <span>{showNotReported ? "\u25BE" : "\u25B8"}</span>
           Not yet reported ({notReported.length})
         </button>
         {showNotReported && (
           <ul className="space-y-1">
             {notReported.map((c) => (
-              <li key={c.symbol} className="py-1 px-2 text-sm text-gray-300">
+              <li key={c.symbol} className="py-1 px-2 text-sm text-line">
                 {c.name}
               </li>
             ))}
