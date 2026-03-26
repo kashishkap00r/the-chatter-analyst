@@ -4,8 +4,7 @@ import {
   type BatchFile,
   type ChatterAnalysisState,
   type PlotlineBatchFile,
-  type PlotlineQuoteMatch,
-  type PlotlineSummaryResult,
+  type PlotlineCompanyGroup,
   type PointsBatchFile,
 } from '../../../types';
 import {
@@ -49,7 +48,6 @@ interface LegacyPersistedAppSessionV1 {
 const MODEL_TYPE_VALUES = new Set<string>(Object.values(ModelType) as string[]);
 const PROVIDER_TYPE_VALUES = new Set<string>(Object.values(ProviderType) as string[]);
 const APP_MODE_VALUES = new Set<string>(['chatter', 'points', 'plotline']);
-const MAX_PLOTLINE_KEYWORDS = 20;
 const POINTS_REUPLOAD_REQUIRED_MESSAGE = 'Original PDF cannot be restored automatically. Re-upload to analyze.';
 
 const asRecord = (value: unknown): Record<string, unknown> | null => {
@@ -147,52 +145,6 @@ const normalizeRecoveredPlotlineFile = (file: PlotlineBatchFile): PlotlineBatchF
   };
 };
 
-const normalizeKeyword = (value: string): string =>
-  value
-    .trim()
-    .replace(/\s+/g, ' ')
-    .replace(/[^\w\s\-./+%]/g, '');
-
-const isValidPlotlineQuote = (value: unknown): value is PlotlineQuoteMatch => {
-  const record = asRecord(value);
-  if (!record) return false;
-
-  return (
-    typeof record.quote === 'string' &&
-    typeof record.speakerName === 'string' &&
-    typeof record.speakerDesignation === 'string' &&
-    Array.isArray(record.matchedKeywords) &&
-    typeof record.periodLabel === 'string' &&
-    typeof record.periodSortKey === 'number'
-  );
-};
-
-const isValidPlotlineSummary = (value: unknown): value is PlotlineSummaryResult => {
-  const record = asRecord(value);
-  if (!record) return false;
-
-  if (!Array.isArray(record.keywords) || !Array.isArray(record.sections) || !Array.isArray(record.closingWatchlist) || !Array.isArray(record.skippedCompanies)) {
-    return false;
-  }
-
-  if (typeof record.title !== 'string' || typeof record.dek !== 'string') {
-    return false;
-  }
-
-  return record.sections.every((section) => {
-    const sectionRecord = asRecord(section);
-    if (!sectionRecord) return false;
-
-    return (
-      typeof sectionRecord.companyKey === 'string' &&
-      typeof sectionRecord.companyName === 'string' &&
-      typeof sectionRecord.subhead === 'string' &&
-      Array.isArray(sectionRecord.narrativeParagraphs) &&
-      Array.isArray(sectionRecord.quoteBlocks) &&
-      sectionRecord.quoteBlocks.every((quote) => isValidPlotlineQuote(quote))
-    );
-  });
-};
 
 const resolveInputMode = (value: unknown): 'text' | 'file' =>
   value === 'text' || value === 'file' ? value : 'file';
@@ -277,19 +229,13 @@ const normalizePointsSlice = (candidate: Record<string, unknown>): PointsSession
 
 const normalizePlotlineSlice = (candidate: Record<string, unknown>): PlotlineSessionSlice => {
   const batchFiles = toArray<PlotlineBatchFile>(candidate.batchFiles).map(normalizeRecoveredPlotlineFile);
-
-  const restoredKeywords = toArray<unknown>(candidate.keywords)
-    .filter((item): item is string => typeof item === 'string')
-    .map((item) => normalizeKeyword(item))
-    .filter((item) => item.length > 0)
-    .slice(0, MAX_PLOTLINE_KEYWORDS);
-
-  const summary = isValidPlotlineSummary(candidate.summary) ? candidate.summary : null;
+  const thesis = typeof candidate.thesis === 'string' ? candidate.thesis : '';
+  const companyGroups = toArray<PlotlineCompanyGroup>(candidate.companyGroups);
 
   return {
     batchFiles,
-    keywords: Array.from(new Set(restoredKeywords)),
-    summary,
+    thesis,
+    companyGroups,
   };
 };
 
@@ -365,8 +311,8 @@ const normalizeLegacyV1Session = (candidate: LegacyPersistedAppSessionV1): Persi
     },
     plotline: {
       batchFiles: candidate.plotlineBatchFiles,
-      keywords: candidate.plotlineKeywords,
-      summary: candidate.plotlineSummary,
+      thesis: '',
+      companyGroups: [],
     },
   };
 

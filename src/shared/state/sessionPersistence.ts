@@ -2,7 +2,7 @@ import type {
   BatchFile,
   ChatterAnalysisState,
   PlotlineBatchFile,
-  PlotlineSummaryResult,
+  PlotlineCompanyGroup,
   PointsAndFiguresResult,
   PointsBatchFile,
   SelectedSlide,
@@ -130,10 +130,6 @@ const sanitizePlotlineBatchFile = (file: PlotlineBatchFile): PlotlineBatchFile =
   };
 };
 
-const sanitizePlotlineSummary = (summary: PlotlineSummaryResult | null): PlotlineSummaryResult | null => {
-  if (!summary) return null;
-  return summary;
-};
 
 export const buildPersistableSession = (snapshot: PersistedAppSessionV2): PersistedAppSessionV2 => ({
   ...snapshot,
@@ -147,8 +143,8 @@ export const buildPersistableSession = (snapshot: PersistedAppSessionV2): Persis
     batchFiles: snapshot.points.batchFiles.map((file) => sanitizePointsBatchFile(file)),
   },
   plotline: {
-    ...snapshot.plotline,
     batchFiles: snapshot.plotline.batchFiles.map((file) => sanitizePlotlineBatchFile(file)),
-    summary: sanitizePlotlineSummary(snapshot.plotline.summary),
+    thesis: snapshot.plotline.thesis || '',
+    companyGroups: snapshot.plotline.companyGroups || [],
   },
 });
