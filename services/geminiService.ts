@@ -2,9 +2,7 @@ import {
   ChatterAnalysisResult,
   ModelType,
   PlotlineFileResult,
-  PlotlineNarrativeRequestCompany,
-  PlotlineStoryPlanResult,
-  PlotlineSummaryResult,
+  PlotlineQuote,
   PointsAndFiguresResult,
   ProgressEvent,
   ProviderType,
@@ -18,8 +16,6 @@ import {
 const CHATTER_ANALYZE_ENDPOINT = "/api/chatter/analyze";
 const POINTS_ANALYZE_ENDPOINT = "/api/points/analyze";
 const PLOTLINE_ANALYZE_ENDPOINT = "/api/plotline/analyze";
-const PLOTLINE_SUMMARIZE_ENDPOINT = "/api/plotline/summarize";
-const PLOTLINE_WRITE_ENDPOINT = "/api/plotline/write";
 const CHATTER_THREAD_INGEST_ENDPOINT = "/api/chatter/thread/ingest";
 const CHATTER_THREAD_GENERATE_ENDPOINT = "/api/chatter/thread/generate";
 const CHATTER_THREAD_REGENERATE_ENDPOINT = "/api/chatter/thread/regenerate";
@@ -77,41 +73,6 @@ interface PlotlineAnalyzeApiResult {
     periodLabel: string;
     periodSortKey: number;
   }>;
-}
-
-interface PlotlinePlanApiResult {
-  title: string;
-  dek: string;
-  sectionPlans: Array<{
-    companyKey: string;
-    subhead: string;
-    narrativeAngle: string;
-    chronologyMode: "timeline" | "same_period";
-    quoteIds: string[];
-  }>;
-  skippedCompanyKeys: string[];
-}
-
-interface PlotlineStoryApiResult {
-  title: string;
-  dek: string;
-  sections: Array<{
-    companyKey: string;
-    companyName: string;
-    subhead: string;
-    narrativeParagraphs: string[];
-    quoteBlocks: Array<{
-      quoteId: string;
-      quote: string;
-      speakerName: string;
-      speakerDesignation: string;
-      matchedKeywords: string[];
-      periodLabel: string;
-      periodSortKey: number;
-    }>;
-  }>;
-  closingWatchlist: string[];
-  skippedCompanies: string[];
 }
 
 interface PdfImageConversionOptions {
@@ -480,7 +441,7 @@ export const analyzeTranscript = async (
 
 export const analyzePlotlineTranscript = async (
   transcript: string,
-  keywords: string[],
+  thesis: string,
   provider: ProviderType = ProviderType.GEMINI,
   modelId: ModelType = ModelType.FLASH_3,
   onProgress?: (event: ProgressEvent) => void,
@@ -488,8 +449,8 @@ export const analyzePlotlineTranscript = async (
   if (!transcript.trim()) {
     throw new Error("Transcript is empty.");
   }
-  if (!Array.isArray(keywords) || keywords.length === 0) {
-    throw new Error("At least one keyword is required.");
+  if (!thesis.trim()) {
+    throw new Error("Thesis description is required.");
   }
 
   let progressInterval: ReturnType<typeof setInterval> | undefined;
@@ -508,108 +469,36 @@ export const analyzePlotlineTranscript = async (
       provider,
       model: modelId,
       transcript,
-      keywords,
+      thesis,
     });
 
     if (!Array.isArray(result?.quotes)) {
       throw new Error("Plotline analysis returned an invalid payload.");
     }
 
-    onProgress?.({ stage: "complete", message: "Plotline matches ready.", percent: 100 });
+    onProgress?.({ stage: "complete", message: "Plotline extraction ready.", percent: 100 });
     return {
       companyName: result.companyName,
       fiscalPeriod: result.fiscalPeriod,
       nseScrip: result.nseScrip,
       marketCapCategory: result.marketCapCategory,
       industry: result.industry,
-      companyDescription: result.companyDescription,
-      quotes: result.quotes,
+      quotes: result.quotes.map((q: any, i: number) => ({
+        quoteId: q.quoteId || `q-${i}`,
+        quote: q.quote,
+        speakerName: q.speakerName,
+        speakerDesignation: q.speakerDesignation,
+        periodLabel: q.periodLabel,
+        periodSortKey: q.periodSortKey,
+        selected: true,
+      })),
     };
   } catch (error) {
-    onProgress?.({ stage: "error", message: "Plotline analysis failed. Please retry.", percent: 100 });
+    onProgress?.({ stage: "error", message: "Plotline extraction failed. Please retry.", percent: 100 });
     throw error;
   } finally {
-    if (progressInterval) {
-      clearInterval(progressInterval);
-    }
+    if (progressInterval) clearInterval(progressInterval);
   }
-};
-
-export const summarizePlotlineTheme = async (
-  keywords: string[],
-  companies: PlotlineNarrativeRequestCompany[],
-  provider: ProviderType = ProviderType.GEMINI,
-  modelId: ModelType = ModelType.FLASH_3,
-): Promise<PlotlineStoryPlanResult> => {
-  if (!Array.isArray(keywords) || keywords.length === 0) {
-    throw new Error("At least one keyword is required.");
-  }
-  if (!Array.isArray(companies) || companies.length === 0) {
-    throw new Error("At least one company is required for Plotline summary.");
-  }
-
-  const result = await postJson<PlotlinePlanApiResult>(PLOTLINE_SUMMARIZE_ENDPOINT, {
-    provider,
-    model: modelId,
-    keywords,
-    companies,
-  });
-
-  if (!Array.isArray(result?.sectionPlans) || !Array.isArray(result?.skippedCompanyKeys)) {
-    throw new Error("Plotline planner returned an invalid payload.");
-  }
-
-  return {
-    title: result.title,
-    dek: result.dek,
-    sectionPlans: result.sectionPlans,
-    skippedCompanyKeys: result.skippedCompanyKeys,
-  };
-};
-
-export const writePlotlineStory = async (
-  keywords: string[],
-  companies: PlotlineNarrativeRequestCompany[],
-  plan: PlotlineStoryPlanResult,
-  provider: ProviderType = ProviderType.GEMINI,
-  modelId: ModelType = ModelType.FLASH_3,
-): Promise<PlotlineSummaryResult> => {
-  if (!Array.isArray(keywords) || keywords.length === 0) {
-    throw new Error("At least one keyword is required.");
-  }
-  if (!Array.isArray(companies) || companies.length === 0) {
-    throw new Error("At least one company is required for Plotline story.");
-  }
-  if (!plan || !Array.isArray(plan.sectionPlans)) {
-    throw new Error("Plotline plan is required before writing.");
-  }
-
-  const result = await postJson<PlotlineStoryApiResult>(PLOTLINE_WRITE_ENDPOINT, {
-    provider,
-    model: modelId,
-    keywords,
-    companies,
-    plan,
-  });
-
-  if (!Array.isArray(result?.sections) || !Array.isArray(result?.closingWatchlist)) {
-    throw new Error("Plotline writer returned an invalid payload.");
-  }
-
-  return {
-    keywords: [...keywords],
-    title: result.title,
-    dek: result.dek,
-    sections: result.sections.map((section) => ({
-      companyKey: section.companyKey,
-      companyName: section.companyName,
-      subhead: section.subhead,
-      narrativeParagraphs: section.narrativeParagraphs,
-      quoteBlocks: section.quoteBlocks,
-    })),
-    closingWatchlist: result.closingWatchlist,
-    skippedCompanies: Array.isArray(result.skippedCompanies) ? result.skippedCompanies : [],
-  };
 };
 
 // --- "Points & Figures" Analysis ---
