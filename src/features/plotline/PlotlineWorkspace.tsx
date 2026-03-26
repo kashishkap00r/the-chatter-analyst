@@ -1,297 +1,332 @@
-import React from 'react';
-import AnalysisProgressPanel from '../../../components/AnalysisProgressPanel';
-import { QuoteSkeleton } from '../../shared/ui/skeletons';
-import { statusLabels, statusStyles } from '../../shared/ui/batchStatus';
 import type { PlotlineFeatureController } from './usePlotlineFeature';
-
-const PLOTLINE_MAX_KEYWORDS = 20;
+import type { PlotlineCompanyGroup, PlotlineQuote } from '../../../types';
 
 interface PlotlineWorkspaceProps {
   feature: PlotlineFeatureController;
   disabled: boolean;
 }
 
-export const PlotlineWorkspace: React.FC<PlotlineWorkspaceProps> = ({ feature, disabled }) => {
-  const {
-    plotlineBatchFiles,
-    plotlineBatchProgress,
-    plotlineKeywords,
-    plotlineKeywordInput,
-    plotlineSummary,
-    plotlineCopyAllStatus,
-    plotlineCopyAllErrorMessage,
-    plotlineFileInputRef,
-    plotlineReadyCount,
-    plotlineCompanyCount,
-    isPlotlineLoading,
-    setPlotlineKeywordInput,
-    handlePlotlineKeywordInputKeyDown,
-    handlePlotlineKeywordInputBlur,
-    removePlotlineKeyword,
-    handlePlotlineFileUpload,
-    handleAnalyzePlotlineBatch,
-    handleCopyAllPlotline,
-    removePlotlineBatchFile,
-    retryPlotlineBatchFile,
-    clearPlotline,
-  } = feature;
+export const PlotlineWorkspace = ({ feature, disabled }: PlotlineWorkspaceProps) => {
+  const hasResults = feature.companyGroups.length > 0;
+  const canAnalyze = feature.thesis.trim().length >= 10 && feature.plotlineReadyCount > 0 && !feature.isAnalyzingPlotlineBatch;
 
   return (
-    <>
-      <section className="lg:col-span-5 lg:sticky lg:top-24 self-start">
-        <div className="rounded-z-md border border-line bg-white shadow-panel studio-panel p-5 sm:p-6">
-          <header className="mb-5">
-            <p className="text-xs text-stone font-semibold">Input Desk</p>
-            <h2 className="text-2xl mt-1">Plotline Input</h2>
-          </header>
+    <div className="flex gap-6 items-start w-full max-w-[1280px] mx-auto">
+      {/* Input Panel */}
+      <div className="w-[440px] shrink-0 bg-white rounded-z-md shadow-panel p-6 flex flex-col gap-5">
+        <div>
+          <p className="text-xs text-stone uppercase tracking-wider mb-1">Input Desk</p>
+          <h2 className="text-2xl font-medium text-gray-900">Plotline Input</h2>
+        </div>
 
-          <div className="rounded-z-md border border-line bg-brand-soft p-4 mb-4">
-            <label className="block text-xs text-stone font-semibold mb-2">Theme Keywords</label>
-            <input
-              value={plotlineKeywordInput}
-              onChange={(event) => setPlotlineKeywordInput(event.target.value)}
-              onKeyDown={handlePlotlineKeywordInputKeyDown}
-              onBlur={handlePlotlineKeywordInputBlur}
-              disabled={disabled}
-              placeholder="Add keywords (press Enter or comma)"
-              className="w-full rounded-z-sm border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:ring-2 focus:ring-brand/35"
-            />
-            <div className="mt-3 flex flex-wrap gap-2">
-              {plotlineKeywords.length === 0 && <p className="text-xs text-stone">Add at least one keyword to run Plotline.</p>}
-              {plotlineKeywords.map((keyword) => (
-                <span
-                  key={keyword}
-                  className="inline-flex items-center gap-2 rounded-full border border-line bg-brand-soft px-3 py-1 text-xs font-semibold text-brand"
-                >
-                  {keyword}
-                  <button
-                    onClick={() => removePlotlineKeyword(keyword)}
-                    disabled={disabled || isPlotlineLoading}
-                    className="text-brand hover:text-ink"
-                    aria-label={`Remove ${keyword}`}
-                    title="Remove keyword"
-                  >
-                    X
-                  </button>
-                </span>
-              ))}
-            </div>
-            <p className="mt-2 text-[11px] text-stone">{plotlineKeywords.length}/{PLOTLINE_MAX_KEYWORDS} keywords</p>
-          </div>
+        {/* Thesis Textarea */}
+        <div className="flex flex-col gap-2">
+          <label className="text-sm font-medium text-gray-700">Thesis / Theme</label>
+          <textarea
+            className="w-full h-32 p-3 rounded-z-sm border border-line text-sm text-gray-900 resize-y placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand"
+            placeholder="Describe what you're investigating. E.g., 'How FMCG companies are responding to quick commerce — channel cannibalization, distribution restructuring, and separate QC strategies.'"
+            value={feature.thesis}
+            onChange={(e) => feature.setThesis(e.target.value)}
+            disabled={disabled || feature.isAnalyzingPlotlineBatch}
+          />
+          <p className="text-xs text-stone">
+            {feature.thesis.trim().length < 10
+              ? `${Math.max(0, 10 - feature.thesis.trim().length)} more characters needed`
+              : 'Gemini will find all quotes relevant to this thesis'}
+          </p>
+        </div>
 
-          <div className="relative rounded-z-md border-2 border-dashed border-line bg-brand-soft px-4 py-7 text-center hover:border-brand/45 transition-colors">
-            <p className="text-sm font-medium text-stone">Drop or select transcript files</p>
-            <p className="text-xs text-stone/80 mt-1">Supports PDF and TXT</p>
+        {/* File Upload */}
+        <div>
+          <div
+            className="border-2 border-dashed border-blue-200 bg-blue-50/30 rounded-z-sm p-6 text-center cursor-pointer hover:bg-blue-50/60 transition"
+            onClick={() => !disabled && !feature.isAnalyzingPlotlineBatch && feature.plotlineFileInputRef.current?.click()}
+          >
+            <p className="text-sm text-gray-600">Drop or select transcript files</p>
+            <p className="text-xs text-stone mt-1">Supports PDF and TXT</p>
             <input
-              ref={plotlineFileInputRef}
+              ref={feature.plotlineFileInputRef}
               type="file"
               accept=".pdf,.txt"
               multiple
-              onChange={(event) => {
-                void handlePlotlineFileUpload(event);
-              }}
-              disabled={disabled}
-              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+              className="hidden"
+              onChange={feature.handlePlotlineFileUpload}
+              disabled={disabled || feature.isAnalyzingPlotlineBatch}
             />
-          </div>
-
-          <div className="mt-4 space-y-2 max-h-[320px] overflow-y-auto pr-1 thin-scrollbar">
-            {plotlineBatchFiles.length === 0 && (
-              <div className="rounded-z-md border border-line bg-canvas px-4 py-5 text-center text-sm text-stone">
-                No Plotline files queued yet.
-              </div>
-            )}
-
-            {plotlineBatchFiles.map((file) => (
-              <div key={file.id} className="rounded-z-md border border-line bg-white px-3 py-3">
-                <div className="flex items-start gap-3">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-ink truncate">{file.result?.companyName || file.name}</p>
-                    {file.error && (
-                      <p className={`text-xs mt-1 whitespace-normal break-words ${file.status === 'complete' ? 'text-amber-700' : 'text-rose-700'}`}>
-                        {file.status === 'complete' ? `Warning: ${file.error}` : file.error}
-                      </p>
-                    )}
-                    {file.progress?.message && file.status === 'analyzing' && (
-                      <p className="text-xs text-stone mt-1 truncate">{file.progress.message}</p>
-                    )}
-                  </div>
-                  <span
-                    className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
-                      statusStyles[file.status]
-                    }`}
-                  >
-                    {statusLabels[file.status]}
-                  </span>
-                  {file.status === 'error' && (
-                    <button
-                      onClick={() => retryPlotlineBatchFile(file.id)}
-                      disabled={disabled}
-                      className="text-xs font-semibold text-brand hover:text-ink"
-                      title="Retry file"
-                    >
-                      Retry
-                    </button>
-                  )}
-                  <button
-                    onClick={() => removePlotlineBatchFile(file.id)}
-                    disabled={disabled || isPlotlineLoading}
-                    className="text-stone hover:text-rose-700 text-sm leading-none"
-                    title="Remove file"
-                    aria-label="Remove file"
-                  >
-                    X
-                  </button>
-                </div>
-                {file.status === 'analyzing' && typeof file.progress?.percent === 'number' && (
-                  <div className="h-1.5 rounded-full bg-line mt-2 overflow-hidden">
-                    <div className="h-full bg-brand transition-all duration-300" style={{ width: `${file.progress.percent}%` }} />
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-
-          <div className="mt-5 pt-4 border-t border-line flex gap-3">
-            <button
-              onClick={clearPlotline}
-              disabled={isPlotlineLoading || disabled}
-              className="px-4 py-2.5 rounded-z-md border border-line text-sm font-semibold text-stone hover:text-ink disabled:opacity-50"
-            >
-              Clear
-            </button>
-            <button
-              onClick={() => {
-                void handleAnalyzePlotlineBatch();
-              }}
-              disabled={plotlineReadyCount === 0 || plotlineKeywords.length === 0 || isPlotlineLoading || disabled}
-              className="flex-1 rounded-z-md bg-brand text-white text-sm font-semibold py-2.5 px-4 disabled:opacity-50 hover:bg-brand/90 transition"
-            >
-              {isPlotlineLoading
-                ? 'Processing Batch...'
-                : `Analyze ${plotlineReadyCount} File${plotlineReadyCount === 1 ? '' : 's'}`}
-            </button>
           </div>
         </div>
-      </section>
 
-      <section className="lg:col-span-7 space-y-6">
-        {plotlineCompanyCount > 0 && (
-          <div className="rounded-z-md border border-line bg-white shadow-panel studio-panel p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <p className="text-sm text-stone">
-              {plotlineCompanyCount} compan{plotlineCompanyCount === 1 ? 'y' : 'ies'} included in the current Plotline story.
-            </p>
-            <button
-              onClick={() => {
-                void handleCopyAllPlotline();
-              }}
-              className={`inline-flex items-center justify-center rounded-z-md border px-4 py-2 text-sm font-semibold transition ${
-                plotlineCopyAllStatus === 'copied'
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                  : 'border-brand bg-brand text-white hover:bg-brand/90'
-              }`}
-            >
-              {plotlineCopyAllStatus === 'copied' ? 'Copied All' : 'Copy All'}
-            </button>
-          </div>
-        )}
-
-        {plotlineCopyAllStatus === 'error' && plotlineCopyAllErrorMessage && (
-          <div className="rounded-z-md border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{plotlineCopyAllErrorMessage}</div>
-        )}
-
-        {isPlotlineLoading && (
-          <>
-            <AnalysisProgressPanel
-              title="Plotline Batch Analysis Running"
-              subtitle="Matching keyword-led management remarks and building a cross-company narrative."
-              progress={plotlineBatchProgress?.progress}
-              batchStats={{
-                completed: plotlineBatchProgress?.completed ?? 0,
-                failed: plotlineBatchProgress?.failed ?? 0,
-                total: plotlineBatchProgress?.total ?? 0,
-                currentLabel: plotlineBatchProgress?.currentLabel,
-              }}
-            />
-            <QuoteSkeleton />
-            <QuoteSkeleton />
-          </>
-        )}
-
-        {!isPlotlineLoading && plotlineSummary && plotlineSummary.sections.length === 0 && (
-          <div className="rounded-z-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-            No keyword matches were found across the uploaded transcripts. Try broader or alternate keywords.
-          </div>
-        )}
-
-        {!isPlotlineLoading && !plotlineSummary && (
-          <div className="studio-empty rounded-z-md border border-dashed border-line bg-white/70 p-10 text-center shadow-panel">
-            <h3 className="text-2xl text-ink">Ready for Plotline</h3>
-            <p className="text-sm text-stone mt-2">
-              Upload transcript files, add target keywords, and generate cross-company plotline evidence with synthesis.
-            </p>
-          </div>
-        )}
-
-        {plotlineSummary && (
-          <div className="rounded-z-md border border-line bg-white shadow-panel studio-panel p-5 sm:p-6">
-            <h3 className="text-2xl text-ink">{plotlineSummary.title}</h3>
-            <p className="mt-2 text-sm text-stone leading-relaxed">{plotlineSummary.dek}</p>
-          </div>
-        )}
-
-        {plotlineSummary?.sections.map((section, index) => {
-          return (
-            <div key={section.companyKey} className="rounded-z-md border border-line bg-white shadow-panel studio-panel p-5 sm:p-6 space-y-5">
-              <header>
-                <p className="text-xs font-semibold text-stone">Section {index + 1}</p>
-                <h2 className="text-3xl text-ink">{section.companyName}</h2>
-                <p className="text-sm text-stone">{section.subhead}</p>
-              </header>
-
-              <div className="space-y-3">
-                {section.narrativeParagraphs.map((paragraph, paragraphIndex) => (
-                  <p
-                    key={`${section.companyKey}-paragraph-${paragraphIndex}`}
-                    className="rounded-z-md border border-line bg-brand-soft px-4 py-3 text-sm leading-relaxed text-ink"
-                  >
-                    {paragraph}
-                  </p>
-                ))}
-              </div>
-
-              <div className="space-y-4">
-                {section.quoteBlocks.map((quote, quoteIndex) => (
-                  <article key={`${section.companyKey}-${quoteIndex}`} className="rounded-z-md border border-line bg-brand-soft px-4 py-4">
-                    <p className="text-xs font-semibold text-stone">{quote.periodLabel}</p>
-                    <blockquote className="mt-2 text-[15px] leading-relaxed italic text-ink">"{quote.quote}"</blockquote>
-                    <p className="mt-2 text-xs text-stone italic">
-                      - {quote.speakerName}, {quote.speakerDesignation}
-                    </p>
-                  </article>
-                ))}
-              </div>
-            </div>
-          );
-        })}
-
-        {plotlineSummary && plotlineSummary.closingWatchlist.length > 0 && (
-          <div className="rounded-z-md border border-line bg-white shadow-panel studio-panel p-5 sm:p-6">
-            <h3 className="text-2xl text-ink">What To Watch</h3>
-            <ul className="mt-4 space-y-2 list-disc pl-5 text-sm text-stone leading-relaxed">
-              {plotlineSummary.closingWatchlist.map((line, index) => (
-                <li key={`plotline-watch-${index}`}>{line}</li>
+        {/* File Queue */}
+        <div className="border border-line rounded-z-sm p-3 min-h-[48px]">
+          {feature.plotlineBatchFiles.length === 0 ? (
+            <p className="text-sm text-stone text-center">No files queued yet.</p>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {feature.plotlineBatchFiles.map((file) => (
+                <li key={file.id} className="flex items-center justify-between text-sm">
+                  <span className="truncate max-w-[260px]">{file.name}</span>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs ${
+                      file.status === 'complete' ? 'text-green-600' :
+                      file.status === 'error' ? 'text-red-500' :
+                      file.status === 'analyzing' ? 'text-brand' :
+                      'text-stone'
+                    }`}>
+                      {file.status === 'complete' ? `${file.result?.quotes.length ?? 0} quotes` :
+                       file.status === 'error' ? 'Error' :
+                       file.status === 'analyzing' ? 'Analyzing...' :
+                       file.status === 'parsing' ? 'Parsing...' :
+                       'Ready'}
+                    </span>
+                    {(file.status === 'ready' || file.status === 'error') && (
+                      <button
+                        className="text-xs text-stone hover:text-red-500 transition"
+                        onClick={() => feature.removePlotlineBatchFile(file.id)}
+                      >
+                        x
+                      </button>
+                    )}
+                  </div>
+                </li>
               ))}
             </ul>
-          </div>
-        )}
+          )}
+        </div>
 
-        {plotlineSummary && plotlineSummary.skippedCompanies.length > 0 && (
-          <div className="rounded-z-md border border-line bg-white/70 px-4 py-3 text-xs text-stone">
-            Skipped for weak evidence: {plotlineSummary.skippedCompanies.join(', ')}
+        {/* Action Buttons */}
+        <div className="flex items-center gap-3 pt-1">
+          <button
+            className="text-sm text-stone hover:text-gray-700 transition"
+            onClick={feature.clearPlotline}
+            disabled={disabled || feature.isAnalyzingPlotlineBatch}
+          >
+            Clear
+          </button>
+          <button
+            className="flex-1 py-2.5 rounded-z-sm text-sm font-medium text-white bg-brand hover:bg-brand/90 transition disabled:opacity-50"
+            onClick={feature.handleAnalyzePlotlineBatch}
+            disabled={!canAnalyze || disabled}
+          >
+            {feature.isAnalyzingPlotlineBatch
+              ? 'Analyzing...'
+              : `Analyze ${feature.plotlineReadyCount} File${feature.plotlineReadyCount !== 1 ? 's' : ''}`}
+          </button>
+        </div>
+
+        {feature.plotlineBatchProgress && feature.isAnalyzingPlotlineBatch && (
+          <div className="text-xs text-stone">
+            {feature.plotlineBatchProgress.currentLabel && (
+              <p className="truncate">Processing: {feature.plotlineBatchProgress.currentLabel}</p>
+            )}
+            <p>{feature.plotlineBatchProgress.completed}/{feature.plotlineBatchProgress.total} complete{feature.plotlineBatchProgress.failed > 0 ? ` (${feature.plotlineBatchProgress.failed} failed)` : ''}</p>
           </div>
         )}
-      </section>
+      </div>
+
+      {/* Curation Panel */}
+      <div className="flex-1 min-w-0">
+        {!hasResults ? (
+          <div className="bg-gray-50 rounded-z-md p-10 text-center">
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Ready for Plotline</h3>
+            <p className="text-sm text-stone max-w-md mx-auto">
+              Describe your thesis, upload transcript files, and run extraction. You'll curate the quotes here before copying.
+            </p>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-4">
+            {/* Curation Header */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <h3 className="text-lg font-semibold text-gray-900">
+                  {feature.selectedQuoteCount} of {feature.totalQuoteCount} quotes selected
+                </h3>
+                <div className="flex items-center gap-1 bg-gray-100 rounded-z-sm p-0.5">
+                  <button
+                    className={`px-3 py-1 text-xs rounded-z-sm transition ${
+                      feature.groupingMode === 'company'
+                        ? 'bg-white shadow-sm text-gray-900'
+                        : 'text-stone hover:text-gray-700'
+                    }`}
+                    onClick={() => feature.setGroupingMode('company')}
+                  >
+                    By Company
+                  </button>
+                  <button
+                    className={`px-3 py-1 text-xs rounded-z-sm transition ${
+                      feature.groupingMode === 'period'
+                        ? 'bg-white shadow-sm text-gray-900'
+                        : 'text-stone hover:text-gray-700'
+                    }`}
+                    onClick={() => feature.setGroupingMode('period')}
+                  >
+                    By Period
+                  </button>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  className="px-3 py-1.5 text-xs text-stone hover:text-gray-700 transition"
+                  onClick={feature.selectAllQuotes}
+                >
+                  Select All
+                </button>
+                <button
+                  className="px-4 py-2 text-sm font-medium text-white bg-brand rounded-z-sm hover:bg-brand/90 transition disabled:opacity-50"
+                  onClick={feature.handleCopyBrief}
+                  disabled={feature.selectedQuoteCount === 0}
+                >
+                  {feature.plotlineCopyStatus === 'copied' ? 'Copied!' :
+                   feature.plotlineCopyStatus === 'error' ? 'Copy Failed' :
+                   'Copy Brief'}
+                </button>
+              </div>
+            </div>
+
+            {/* Quote Groups */}
+            {feature.groupingMode === 'company' ? (
+              feature.companyGroups.map((group) => (
+                <CompanyQuoteGroup
+                  key={group.companyKey}
+                  group={group}
+                  onToggle={feature.toggleQuote}
+                  onDeselectAll={feature.deselectCompany}
+                />
+              ))
+            ) : (
+              <PeriodQuoteGroups
+                groups={feature.companyGroups}
+                onToggle={feature.toggleQuote}
+              />
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/* ---- Sub-components ---- */
+
+const CompanyQuoteGroup = ({
+  group,
+  onToggle,
+  onDeselectAll,
+}: {
+  group: PlotlineCompanyGroup;
+  onToggle: (companyKey: string, quoteId: string) => void;
+  onDeselectAll: (companyKey: string) => void;
+}) => {
+  const selectedCount = group.quotes.filter(q => q.selected).length;
+
+  return (
+    <div className="bg-white rounded-z-md shadow-panel p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h4 className="text-base font-semibold text-gray-900">
+            {group.companyName}
+            <span className="ml-2 text-xs text-stone font-normal">{group.nseScrip} &middot; {group.industry}</span>
+          </h4>
+          <p className="text-xs text-stone mt-0.5">
+            {group.periods.join(', ')} &middot; {selectedCount}/{group.quotes.length} selected
+          </p>
+        </div>
+        <button
+          className="text-xs text-stone hover:text-red-500 transition"
+          onClick={() => onDeselectAll(group.companyKey)}
+        >
+          Deselect All
+        </button>
+      </div>
+      <div className="flex flex-col gap-3">
+        {group.quotes.map((quote) => (
+          <QuoteCard
+            key={quote.quoteId}
+            quote={quote}
+            companyKey={group.companyKey}
+            onToggle={onToggle}
+          />
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const PeriodQuoteGroups = ({
+  groups,
+  onToggle,
+}: {
+  groups: PlotlineCompanyGroup[];
+  onToggle: (companyKey: string, quoteId: string) => void;
+}) => {
+  // Flatten all quotes with company info, sort by period
+  const allQuotes = groups.flatMap(g =>
+    g.quotes.map(q => ({ ...q, companyKey: g.companyKey, companyName: g.companyName, nseScrip: g.nseScrip })),
+  );
+  allQuotes.sort((a, b) => a.periodSortKey - b.periodSortKey);
+
+  // Group by periodLabel
+  const periodMap = new Map<string, typeof allQuotes>();
+  for (const q of allQuotes) {
+    const existing = periodMap.get(q.periodLabel) || [];
+    existing.push(q);
+    periodMap.set(q.periodLabel, existing);
+  }
+
+  return (
+    <>
+      {Array.from(periodMap.entries()).map(([period, quotes]) => (
+        <div key={period} className="bg-white rounded-z-md shadow-panel p-5">
+          <h4 className="text-base font-semibold text-gray-900 mb-4">{period}</h4>
+          <div className="flex flex-col gap-3">
+            {quotes.map((q) => (
+              <QuoteCard
+                key={q.quoteId}
+                quote={q}
+                companyKey={q.companyKey}
+                companyLabel={`${q.companyName} (${q.nseScrip})`}
+                onToggle={onToggle}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
     </>
   );
 };
+
+const QuoteCard = ({
+  quote,
+  companyKey,
+  companyLabel,
+  onToggle,
+}: {
+  quote: PlotlineQuote;
+  companyKey: string;
+  companyLabel?: string;
+  onToggle: (companyKey: string, quoteId: string) => void;
+}) => (
+  <label
+    className={`flex gap-3 p-3 rounded-z-sm border cursor-pointer transition ${
+      quote.selected
+        ? 'border-brand/30 bg-blue-50/30'
+        : 'border-line bg-gray-50/50 opacity-60'
+    }`}
+  >
+    <input
+      type="checkbox"
+      checked={quote.selected}
+      onChange={() => onToggle(companyKey, quote.quoteId)}
+      className="mt-1 shrink-0 accent-brand"
+    />
+    <div className="flex-1 min-w-0">
+      {companyLabel && (
+        <p className="text-xs text-brand font-medium mb-1">{companyLabel}</p>
+      )}
+      <p className="text-sm text-gray-800 leading-relaxed">{quote.quote}</p>
+      <p className="text-xs text-stone mt-1.5">
+        &mdash; {quote.speakerName}{quote.speakerDesignation ? `, ${quote.speakerDesignation}` : ''}
+        <span className="ml-2">{quote.periodLabel}</span>
+      </p>
+    </div>
+  </label>
+);

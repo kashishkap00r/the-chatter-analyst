@@ -1,3 +1,3 @@
-export { usePlotlineFeature } from './usePlotlineFeature';
-export type { PlotlineFeatureController } from './usePlotlineFeature';
 export { PlotlineWorkspace } from './PlotlineWorkspace';
+export { usePlotlineFeature } from './usePlotlineFeature';
+export type { PlotlineFeatureController, PlotlineGroupingMode } from './usePlotlineFeature';
