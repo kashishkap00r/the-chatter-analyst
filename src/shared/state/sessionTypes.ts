@@ -5,7 +5,7 @@ import type {
   ModelType,
   PointsBatchFile,
   PlotlineBatchFile,
-  PlotlineSummaryResult,
+  PlotlineCompanyGroup,
   ProviderType,
   ProgressEvent,
 } from '../../../types';
@@ -42,8 +42,8 @@ export interface PointsSessionSlice {
 
 export interface PlotlineSessionSlice {
   batchFiles: PlotlineBatchFile[];
-  keywords: string[];
-  summary: PlotlineSummaryResult | null;
+  thesis: string;
+  companyGroups: PlotlineCompanyGroup[];
 }
 
 export interface PersistedAppSessionV2 {

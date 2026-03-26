@@ -146,14 +146,14 @@ export interface PointsAnalysisState {
 
 // --- "Plotline" Types ---
 
-export interface PlotlineQuoteMatch {
-  quoteId?: string;
+export interface PlotlineQuote {
+  quoteId: string;
   quote: string;
   speakerName: string;
   speakerDesignation: string;
-  matchedKeywords: string[];
   periodLabel: string;
   periodSortKey: number;
+  selected: boolean;
 }
 
 export interface PlotlineFileResult {
@@ -162,8 +162,7 @@ export interface PlotlineFileResult {
   nseScrip: string;
   marketCapCategory: string;
   industry: string;
-  companyDescription: string;
-  quotes: PlotlineQuoteMatch[];
+  quotes: PlotlineQuote[];
 }
 
 export interface PlotlineBatchFile {
@@ -176,67 +175,13 @@ export interface PlotlineBatchFile {
   progress?: ProgressEvent;
 }
 
-export interface PlotlineCompanyResult {
-  companyKey: string;
-  companyName: string;
-  fiscalPeriod?: string;
-  nseScrip: string;
-  marketCapCategory: string;
-  industry: string;
-  companyDescription: string;
-  quotes: PlotlineQuoteMatch[];
-}
-
-export interface PlotlineStoryPlanSection {
-  companyKey: string;
-  subhead: string;
-  narrativeAngle: string;
-  chronologyMode: 'timeline' | 'same_period';
-  quoteIds: string[];
-}
-
-export interface PlotlineStoryPlanResult {
-  title: string;
-  dek: string;
-  sectionPlans: PlotlineStoryPlanSection[];
-  skippedCompanyKeys: string[];
-}
-
-export interface PlotlineStorySection {
-  companyKey: string;
-  companyName: string;
-  subhead: string;
-  narrativeParagraphs: string[];
-  quoteBlocks: PlotlineQuoteMatch[];
-}
-
-export interface PlotlineSummaryResult {
-  keywords: string[];
-  title: string;
-  dek: string;
-  sections: PlotlineStorySection[];
-  closingWatchlist: string[];
-  skippedCompanies: string[];
-}
-
-export interface PlotlineNarrativeRequestCompany {
+export interface PlotlineCompanyGroup {
   companyKey: string;
   companyName: string;
   nseScrip: string;
-  marketCapCategory: string;
   industry: string;
-  companyDescription: string;
-  quotes: PlotlineQuoteMatch[];
-}
-
-export interface PlotlineNarrativeResult {
-  sections: Array<{
-    companyKey: string;
-    subhead: string;
-    narrativeParagraphs: string[];
-    quoteIds: string[];
-  }>;
-  closingWatchlist: string[];
+  periods: string[];
+  quotes: PlotlineQuote[];
 }
 
 

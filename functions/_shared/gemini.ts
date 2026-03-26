@@ -161,7 +161,6 @@ export const PLOTLINE_EXTRACT_RESPONSE_SCHEMA = {
     nseScrip: { type: "STRING" },
     marketCapCategory: { type: "STRING" },
     industry: { type: "STRING" },
-    companyDescription: { type: "STRING" },
     quotes: {
       type: "ARRAY",
       items: {
@@ -170,10 +169,6 @@ export const PLOTLINE_EXTRACT_RESPONSE_SCHEMA = {
           quote: { type: "STRING" },
           speakerName: { type: "STRING" },
           speakerDesignation: { type: "STRING" },
-          matchedKeywords: {
-            type: "ARRAY",
-            items: { type: "STRING" },
-          },
           periodLabel: { type: "STRING" },
           periodSortKey: { type: "INTEGER" },
         },
@@ -181,7 +176,6 @@ export const PLOTLINE_EXTRACT_RESPONSE_SCHEMA = {
           "quote",
           "speakerName",
           "speakerDesignation",
-          "matchedKeywords",
           "periodLabel",
           "periodSortKey",
         ],
@@ -194,72 +188,10 @@ export const PLOTLINE_EXTRACT_RESPONSE_SCHEMA = {
     "nseScrip",
     "marketCapCategory",
     "industry",
-    "companyDescription",
     "quotes",
   ],
 };
 
-export const PLOTLINE_PLAN_RESPONSE_SCHEMA = {
-  type: "OBJECT",
-  properties: {
-    title: { type: "STRING" },
-    dek: { type: "STRING" },
-    sectionPlans: {
-      type: "ARRAY",
-      items: {
-        type: "OBJECT",
-        properties: {
-          companyKey: { type: "STRING" },
-          subhead: { type: "STRING" },
-          narrativeAngle: { type: "STRING" },
-          chronologyMode: { type: "STRING" },
-          quoteIds: {
-            type: "ARRAY",
-            items: { type: "STRING" },
-          },
-        },
-        required: ["companyKey", "subhead", "narrativeAngle", "chronologyMode", "quoteIds"],
-      },
-    },
-    skippedCompanyKeys: {
-      type: "ARRAY",
-      items: { type: "STRING" },
-    },
-  },
-  required: ["title", "dek", "sectionPlans", "skippedCompanyKeys"],
-};
-
-export const PLOTLINE_WRITE_RESPONSE_SCHEMA = {
-  type: "OBJECT",
-  properties: {
-    title: { type: "STRING" },
-    dek: { type: "STRING" },
-    sections: {
-      type: "ARRAY",
-      items: {
-        type: "OBJECT",
-        properties: {
-          companyKey: { type: "STRING" },
-          subhead: { type: "STRING" },
-          narrativeParagraphs: {
-            type: "ARRAY",
-            items: { type: "STRING" },
-          },
-          quoteIds: {
-            type: "ARRAY",
-            items: { type: "STRING" },
-          },
-        },
-        required: ["companyKey", "subhead", "narrativeParagraphs", "quoteIds"],
-      },
-    },
-    closingWatchlist: {
-      type: "ARRAY",
-      items: { type: "STRING" },
-    },
-  },
-  required: ["title", "dek", "sections", "closingWatchlist"],
-};
 
 export const CHATTER_PROMPT = `
 ROLE & AUDIENCE
@@ -482,96 +414,35 @@ OUTPUT RULES
 
 export const PLOTLINE_EXTRACT_PROMPT = `
 ROLE
-You are extracting Plotline evidence from an earnings call transcript.
+You are a research analyst extracting evidence from an earnings call transcript for a thematic newsletter edition.
 
 GOAL
-- Find only management quotes that explicitly mention any user-provided keyword (or close textual variant).
-- Keep focus on long-term structural signals, not routine quarter noise.
+The user has described a thesis or theme they are investigating. Your job is to read the full transcript and find every management quote that is relevant to that thesis — directly or tangentially.
 
 INPUT
-- You will receive:
-  1) a keyword list
-  2) transcript content, often as keyword-focused excerpts plus header metadata
+You will receive:
+1) A thesis description — the user's narrative of what they are investigating
+2) A full earnings call transcript
 
 EXTRACTION RULES
-- Include only management remarks (exclude analyst questions).
-- A quote is valid only if keyword presence is explicit in the quote text.
-- Use only the provided transcript text; do not invent unseen lines.
-- For each quote, return a short paragraph-style excerpt (ideally 2-3 sentences):
-  1) one sentence before keyword sentence (if available)
-  2) keyword sentence
-  3) one sentence after keyword sentence (if available)
-- Do not paraphrase the quote text.
-- Return matchedKeywords as the exact keyword(s) from user list that were matched.
-- Infer periodLabel from transcript context; prefer short label like Jun'26, Mar'26, Sep'25.
-- Infer periodSortKey as integer YYYYMM (for Jun'26 => 202606). If uncertain, use best estimate from transcript metadata.
-- Keep output concise and precise; avoid generic non-keyword commentary.
-- If the same context is repeated multiple times in the transcript, keep only the strongest one and drop repeats.
+- Include only management remarks. Exclude analyst questions.
+- A quote is relevant if it connects to the thesis — it does not need to use exact words from the thesis.
+- Cast a wide net. Include quotes that are tangentially relevant, offer useful context, or provide a contrasting perspective on the thesis.
+- Return ALL relevant quotes. Do not limit, consolidate, or summarize. Err on the side of inclusion. If a company talks about the thesis extensively, return every distinct point they make.
+- For each quote, return a paragraph-style excerpt of 2-3 sentences that preserves the full context:
+  1) One sentence before the key statement (if available)
+  2) The key statement itself
+  3) One sentence after (if available)
+- Do not paraphrase. Use the exact words from the transcript.
+- If the transcript contains no quotes relevant to the thesis, return an empty quotes array.
+- Infer periodLabel from transcript context (e.g., "Q3 FY26", "Mar'26").
+- Infer periodSortKey as integer YYYYMM (e.g., for Mar'26 => 202603).
+- If the same point is made in both prepared remarks and Q&A, keep both — the Q&A version often has more candid detail.
 
 OUTPUT
-- Return valid JSON only with:
-  companyName, fiscalPeriod, nseScrip, marketCapCategory, industry, companyDescription, quotes.
-- nseScrip must be uppercase A-Z0-9.
-- quotes should include only keyword-matching management remarks.
-`.trim();
-
-export const PLOTLINE_PLAN_PROMPT = `
-ROLE
-You are the Plotline story planner for a Daily Brief-style long-form narrative.
-
-GOAL
-- Build a master story-first plan from company quote evidence.
-- The final story rotates company-by-company, not as a quote list.
-
-EDITORIAL RULES
-- Prioritize strongest narrative signal first (not alphabetical).
-- Weak-evidence companies should be skipped.
-- For each included company, choose 2-3 quoteIds that best support the section's narrative angle.
-- Chronology mode:
-  - Use "timeline" when company evidence spans multiple periods.
-  - Use "same_period" when evidence is primarily from one period.
-- Use soft, readable subheads.
-- Use plain, sharp language; avoid corporate-speak.
-
-OUTPUT RULES
-- Return strict JSON only with:
-  1) title: string
-  2) dek: string
-  3) sectionPlans: [{ companyKey, subhead, narrativeAngle, chronologyMode, quoteIds }]
-  4) skippedCompanyKeys: string[]
-- Do not include company keys that are not in input.
-- Do not include quoteIds that are not in input.
-`.trim();
-
-export const PLOTLINE_WRITE_PROMPT = `
-ROLE
-You are writing a publish-ready Plotline story in Daily Brief style using a pre-approved section plan.
-
-GOAL
-- Write one integrated story with company-by-company sections.
-- Narrative first, with quote evidence woven in.
-
-STYLE RULES
-- Simple, clear English. Avoid dense jargon.
-- Explain why each quote matters strategically.
-- Do not repeat the same point in different words.
-- Keep each section practical and analytical.
-
-SECTION RULES
-- Each section should include 2-4 short narrative paragraphs.
-- Use provided quoteIds only.
-- Ensure narrative aligns with section subhead and narrativeAngle.
-
-ENDING RULES
-- Add a forward-looking close with 3-5 "what to watch" lines.
-
-OUTPUT RULES
-- Return strict JSON only with:
-  1) title: string
-  2) dek: string
-  3) sections: [{ companyKey, subhead, narrativeParagraphs: string[], quoteIds: string[] }]
-  4) closingWatchlist: string[]
-- Do not include unknown company keys or quoteIds.
+- Return valid JSON with: companyName, fiscalPeriod, nseScrip, marketCapCategory, industry, quotes.
+- nseScrip must be uppercase A-Z0-9 only.
+- Each quote object: { quote, speakerName, speakerDesignation, periodLabel, periodSortKey }.
 `.trim();
 
 const parseGeminiText = (payload: any): string => {
