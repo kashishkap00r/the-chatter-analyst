@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useRef, useCallback, useMemo } from 'react';
 import type {
   PlotlineBatchFile,
   PlotlineCompanyGroup,
@@ -174,7 +174,7 @@ export const usePlotlineFeature = ({
     if (!fileList) return;
 
     const newFiles: PlotlineBatchFile[] = [];
-    for (const file of Array.from(fileList)) {
+    for (const file of Array.from(fileList) as File[]) {
       const id = crypto.randomUUID();
       const isPdf = file.name.toLowerCase().endsWith('.pdf');
 

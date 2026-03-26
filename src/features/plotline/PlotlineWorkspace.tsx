@@ -1,3 +1,4 @@
+import React from 'react';
 import type { PlotlineFeatureController } from './usePlotlineFeature';
 import type { PlotlineCompanyGroup, PlotlineQuote } from '../../../types';
 
@@ -207,15 +208,11 @@ export const PlotlineWorkspace = ({ feature, disabled }: PlotlineWorkspaceProps)
 
 /* ---- Sub-components ---- */
 
-const CompanyQuoteGroup = ({
-  group,
-  onToggle,
-  onDeselectAll,
-}: {
+const CompanyQuoteGroup: React.FC<{
   group: PlotlineCompanyGroup;
   onToggle: (companyKey: string, quoteId: string) => void;
   onDeselectAll: (companyKey: string) => void;
-}) => {
+}> = ({ group, onToggle, onDeselectAll }) => {
   const selectedCount = group.quotes.filter(q => q.selected).length;
 
   return (
@@ -251,13 +248,10 @@ const CompanyQuoteGroup = ({
   );
 };
 
-const PeriodQuoteGroups = ({
-  groups,
-  onToggle,
-}: {
+const PeriodQuoteGroups: React.FC<{
   groups: PlotlineCompanyGroup[];
   onToggle: (companyKey: string, quoteId: string) => void;
-}) => {
+}> = ({ groups, onToggle }) => {
   // Flatten all quotes with company info, sort by period
   const allQuotes = groups.flatMap(g =>
     g.quotes.map(q => ({ ...q, companyKey: g.companyKey, companyName: g.companyName, nseScrip: g.nseScrip })),
@@ -294,17 +288,12 @@ const PeriodQuoteGroups = ({
   );
 };
 
-const QuoteCard = ({
-  quote,
-  companyKey,
-  companyLabel,
-  onToggle,
-}: {
+const QuoteCard: React.FC<{
   quote: PlotlineQuote;
   companyKey: string;
   companyLabel?: string;
   onToggle: (companyKey: string, quoteId: string) => void;
-}) => (
+}> = ({ quote, companyKey, companyLabel, onToggle }) => (
   <label
     className={`flex gap-3 p-3 rounded-z-sm border cursor-pointer transition ${
       quote.selected

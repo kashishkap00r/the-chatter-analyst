@@ -5,15 +5,6 @@ import {
   PLOTLINE_EXTRACT_RESPONSE_SCHEMA,
 } from '../../_shared/gemini';
 
-interface Env {
-  GEMINI_API_KEY?: string;
-  VERTEX_API_KEY?: string;
-  GEMINI_PROVIDER?: string;
-  OPENROUTER_API_KEY?: string;
-  OPENROUTER_SITE_URL?: string;
-  OPENROUTER_APP_TITLE?: string;
-}
-
 interface PlotlineAnalyzeRequest {
   thesis: string;
   transcript: string;
@@ -112,7 +103,7 @@ const sanitizeQuote = (raw: unknown): PlotlineQuoteRaw | null => {
 const buildUserContent = (thesis: string, transcript: string): string =>
   `THESIS\n${thesis}\n\nTRANSCRIPT\n${transcript}`;
 
-export const onRequestPost: PagesFunction<Env> = async (context) => {
+export async function onRequestPost(context: any): Promise<Response> {
   const requestId = crypto.randomUUID().slice(0, 8);
 
   let body: PlotlineAnalyzeRequest;
