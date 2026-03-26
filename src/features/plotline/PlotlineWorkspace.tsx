@@ -12,9 +12,10 @@ export const PlotlineWorkspace = ({ feature, disabled }: PlotlineWorkspaceProps)
   const canAnalyze = feature.thesis.trim().length >= 10 && feature.plotlineReadyCount > 0 && !feature.isAnalyzingPlotlineBatch;
 
   return (
-    <div className="flex gap-6 items-start w-full max-w-[1280px] mx-auto">
+    <>
       {/* Input Panel */}
-      <div className="w-[440px] shrink-0 bg-white rounded-z-md shadow-panel p-6 flex flex-col gap-5">
+      <section className="lg:col-span-5 lg:sticky lg:top-24 self-start">
+      <div className="bg-white rounded-z-md shadow-panel p-6 flex flex-col gap-5">
         <div>
           <p className="text-xs text-stone uppercase tracking-wider mb-1">Input Desk</p>
           <h2 className="text-2xl font-medium text-gray-900">Plotline Input</h2>
@@ -123,9 +124,10 @@ export const PlotlineWorkspace = ({ feature, disabled }: PlotlineWorkspaceProps)
           </div>
         )}
       </div>
+      </section>
 
       {/* Curation Panel */}
-      <div className="flex-1 min-w-0">
+      <section className="lg:col-span-7">
         {!hasResults ? (
           <div className="bg-gray-50 rounded-z-md p-10 text-center">
             <h3 className="text-lg font-semibold text-gray-900 mb-2">Ready for Plotline</h3>
@@ -201,8 +203,8 @@ export const PlotlineWorkspace = ({ feature, disabled }: PlotlineWorkspaceProps)
             )}
           </div>
         )}
-      </div>
-    </div>
+      </section>
+    </>
   );
 };
 
