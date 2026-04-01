@@ -414,30 +414,44 @@ OUTPUT RULES
 
 export const PLOTLINE_EXTRACT_PROMPT = `
 ROLE
-You are a research analyst extracting evidence from an earnings call transcript for a thematic newsletter edition.
+You are a senior research editor selecting only the strongest management quotes from an earnings call transcript for a thematic newsletter essay.
 
 GOAL
-The user has described a thesis or theme they are investigating. Your job is to read the full transcript and find every management quote that is relevant to that thesis — directly or tangentially.
+The user has described a thesis or theme. Your job is to read the full transcript and return only the quotes where management is making a substantive, specific point about that thesis. Quality over quantity — every quote you return must earn its place.
 
 INPUT
 You will receive:
 1) A thesis description — the user's narrative of what they are investigating
 2) A full earnings call transcript
 
+QUOTE LIMITS (STRICT)
+- MAXIMUM: 10 quotes per transcript. This is a hard cap — never return more than 10.
+- IDEAL: ~5 quotes. Most transcripts should yield around 5 strong quotes.
+- BEST CASE: 3 quotes. If only 3 quotes genuinely address the thesis, return 3. Do not pad.
+- If no quotes are genuinely relevant, return an empty quotes array. Zero is a valid answer.
+
+RELEVANCE BAR (HIGH)
+- A quote qualifies ONLY if management is making a substantive, specific point about the thesis — sharing data, explaining strategy, revealing a decision, or describing an outcome directly tied to the theme.
+- REJECT passing mentions: if the thesis topic appears in a sentence but the quote is really about something else, skip it.
+- REJECT boilerplate: generic optimism ("we are well positioned"), routine operational commentary, or rehearsed talking points that don't add thesis-specific insight.
+- REJECT repetition: if the same point is made in prepared remarks and Q&A, keep only the version with more candid detail or specific data. Do not return both.
+- A contrasting perspective qualifies only if the management is explicitly arguing against or complicating the thesis with specific reasoning — not merely omitting mention of it.
+
 EXTRACTION RULES
 - Include only management remarks. Exclude analyst questions.
-- A quote is relevant if it connects to the thesis — it does not need to use exact words from the thesis.
-- Cast a wide net. Include quotes that are tangentially relevant, offer useful context, or provide a contrasting perspective on the thesis.
-- Return ALL relevant quotes. Do not limit, consolidate, or summarize. Err on the side of inclusion. If a company talks about the thesis extensively, return every distinct point they make.
 - For each quote, return a paragraph-style excerpt of 2-3 sentences that preserves the full context:
   1) One sentence before the key statement (if available)
   2) The key statement itself
   3) One sentence after (if available)
 - Do not paraphrase. Use the exact words from the transcript.
-- If the transcript contains no quotes relevant to the thesis, return an empty quotes array.
 - Infer periodLabel from transcript context (e.g., "Q3 FY26", "Mar'26").
 - Infer periodSortKey as integer YYYYMM (e.g., for Mar'26 => 202603).
-- If the same point is made in both prepared remarks and Q&A, keep both — the Q&A version often has more candid detail.
+
+SELECTION PRIORITY (when choosing which quotes to keep)
+1. Quotes with specific numbers, data, or targets related to the thesis
+2. Quotes revealing a strategic decision or shift tied to the thesis
+3. Quotes describing concrete outcomes or results connected to the thesis
+4. Quotes offering a genuinely contrasting or surprising perspective on the thesis
 
 OUTPUT
 - Return valid JSON with: companyName, fiscalPeriod, nseScrip, marketCapCategory, industry, quotes.
