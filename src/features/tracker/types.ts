@@ -21,7 +21,27 @@ export interface TrackerSummary {
   pnf_covered: number;
 }
 
-export interface TrackerState {
+// --- Multi-quarter types (schema_version 2) ---
+
+export interface QuarterState {
+  name: string;
+  results_window: [string, string];
+  coverage_deadline: string;
+  is_primary: boolean;
+  summary: TrackerSummary;
+  companies: TrackedCompany[];
+  unmatched: string[];
+}
+
+export interface MultiQuarterState {
+  schema_version: number;
+  last_updated: string;
+  quarters: QuarterState[];
+}
+
+// --- Legacy single-quarter type (schema_version 1 / no version) ---
+
+export interface TrackerStateLegacy {
   active_quarter: string;
   results_window: [string, string];
   last_updated: string;
@@ -29,3 +49,5 @@ export interface TrackerState {
   companies: TrackedCompany[];
   unmatched: string[];
 }
+
+export type TrackerStateResponse = MultiQuarterState | TrackerStateLegacy;

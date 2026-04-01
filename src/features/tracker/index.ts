@@ -1,2 +1,8 @@
 export { TrackerPage } from "./TrackerPage";
-export type { TrackerState, TrackedCompany, CompanyChecklist } from "./types";
+export type {
+  TrackerStateLegacy,
+  TrackedCompany,
+  CompanyChecklist,
+  QuarterState,
+  MultiQuarterState,
+} from "./types";
