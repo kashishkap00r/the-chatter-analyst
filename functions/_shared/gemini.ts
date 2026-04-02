@@ -206,9 +206,9 @@ CORE MISSION
    - Target 8 to 20 quotes.
    - Return fewer than 8 only when genuinely high-signal material is limited.
    - Never return more than 20 quotes.
-6. Coverage target (balanced soft):
-   - Represent both prepared remarks/business update section and management answers during Q&A when both are available.
-   - Do not force fixed section quotas if transcript quality differs across sections.
+6. Coverage target:
+   - At least 5 quotes must come from management answers during the Q&A section.
+   - The remaining quotes can come from prepared remarks, business updates, or Q&A.
 7. Use transcript page markers (for example, "--- Page 12 ---") and avoid taking all quotes only from early pages.
    Prefer spread across early/middle/late pages whenever material exists.
 8. For each quote, provide:
@@ -243,7 +243,7 @@ OUTPUT RULES
 
 SELF-CHECK BEFORE FINALIZING
 - Confirm quote count is at most 20, and target at least 8 when sufficient high-signal material exists.
-- Confirm both prepared remarks and Q&A answers are represented where available.
+- Confirm at least 5 quotes are from management answers in the Q&A section.
 - Confirm output is valid JSON with all required fields.
 `.trim();
 
