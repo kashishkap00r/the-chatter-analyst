@@ -212,7 +212,11 @@ CORE MISSION
 7. Use transcript page markers (for example, "--- Page 12 ---") and avoid taking all quotes only from early pages.
    Prefer spread across early/middle/late pages whenever material exists.
 8. For each quote, provide:
-   a) verbatim management quote
+   a) a paragraph-style verbatim excerpt of 2-4 sentences that preserves context around the key statement:
+      - One sentence before the key statement (if available) to set up the point.
+      - The key statement itself.
+      - One or two sentences after (if available) that reinforce, quantify, or clarify.
+      Do not paraphrase; use the exact words from the transcript. If the key statement is already self-contained, a shorter excerpt is fine.
    b) a two-sentence investor implication summary in simple English
    c) speaker name and designation
 
@@ -223,13 +227,13 @@ QUOTE QUALITY RULES
 - De-prioritize routine quarter updates that only report numbers without explanatory insight.
 - Include business-update quotes only when they add meaningful forward-looking context or management conviction.
 - Avoid repetitive quotes that convey the same point.
-- Preserve original wording; do not paraphrase inside quote.
+- Preserve original wording exactly as spoken; do not paraphrase or rewrite any part of the excerpt.
 
 SUMMARY LANGUAGE RULES
 - Write the summary for a normal reader in clear, simple English.
 - Use short sentences and everyday wording; avoid unnecessary complex jargon.
-- Sentence 1 should state the key business takeaway from the quote.
-- Sentence 2 should state why that takeaway matters for investors.
+- Sentence 1 should give context that makes the quote land: what changed, what decision was made, or what trend the quote is responding to.
+- Sentence 2 should state why that matters for investors — connect it to earnings quality, growth durability, risk, or strategic direction.
 
 OUTPUT RULES
 - Use market cap labels like Large Cap, Mid Cap, Small Cap, or Micro Cap.
