@@ -282,10 +282,13 @@ export const useChatterFeature = ({ provider, selectedModel }: UseChatterFeature
           },
         );
 
+        const stashedUrl = nextFiles[fileIndex].concallUrl;
+        const mergedResult = stashedUrl ? { ...result, concallUrl: stashedUrl } : result;
+
         nextFiles[fileIndex] = {
           ...nextFiles[fileIndex],
           status: 'complete',
-          result,
+          result: mergedResult,
           progress: {
             stage: 'complete',
             message: 'Insights ready.',
@@ -376,6 +379,7 @@ export const useChatterFeature = ({ provider, selectedModel }: UseChatterFeature
       name: `${c.name}${c.concall_event_time ? ` — ${c.concall_event_time.slice(0, 10)}` : ''}`,
       content: '',
       status: 'parsing',
+      concallUrl: c.transcript,
     }));
 
     setBatchFiles((prev) => [...prev, ...newItems]);

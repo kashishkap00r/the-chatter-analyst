@@ -104,6 +104,7 @@ export interface BatchFile {
   result?: ChatterAnalysisResult;
   error?: string;
   progress?: ProgressEvent;
+  concallUrl?: string;
 }
 
 

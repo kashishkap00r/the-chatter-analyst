@@ -51,6 +51,7 @@ const sanitizeChatterBatchFile = (file: BatchFile): BatchFile => {
       result: file.result,
       error: file.error,
       progress: undefined,
+      concallUrl: file.concallUrl,
     };
   }
 
@@ -62,6 +63,7 @@ const sanitizeChatterBatchFile = (file: BatchFile): BatchFile => {
     error: file.error,
     result: undefined,
     progress: undefined,
+    concallUrl: file.concallUrl,
   };
 };
 
