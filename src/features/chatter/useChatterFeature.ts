@@ -23,6 +23,9 @@ import {
 } from '../../shared/utils/retry';
 import { statusLabels, statusStyles } from '../../shared/ui/batchStatus';
 import { QuoteSkeleton } from '../../shared/ui/skeletons';
+import type { TijoriConcall } from './tijori/tijoriTypes';
+
+export type ChatterInputMode = 'tijori' | 'text' | 'file';
 
 interface UseChatterFeatureParams {
   provider: ProviderType;
@@ -30,7 +33,8 @@ interface UseChatterFeatureParams {
 }
 
 export interface ChatterFeatureController {
-  inputMode: 'text' | 'file';
+  inputMode: ChatterInputMode;
+  isIngestingTijori: boolean;
   chatterPane: 'analysis' | 'thread';
   textInput: string;
   batchFiles: BatchFile[];
@@ -44,12 +48,13 @@ export interface ChatterFeatureController {
   readyCount: number;
   isTextLoading: boolean;
   isChatterLoading: boolean;
-  setInputMode: React.Dispatch<React.SetStateAction<'text' | 'file'>>;
+  setInputMode: React.Dispatch<React.SetStateAction<ChatterInputMode>>;
   setChatterPane: React.Dispatch<React.SetStateAction<'analysis' | 'thread'>>;
   setTextInput: React.Dispatch<React.SetStateAction<string>>;
   handleAnalyzeText: () => Promise<void>;
   handleAnalyzeBatch: () => Promise<void>;
   handleChatterFileUpload: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
+  ingestTijoriSelections: (concalls: TijoriConcall[]) => Promise<void>;
   handleCopyAllChatter: () => Promise<void>;
   removeBatchFile: (id: string) => void;
   retryBatchFile: (id: string) => void;
@@ -59,9 +64,10 @@ export interface ChatterFeatureController {
 }
 
 export const useChatterFeature = ({ provider, selectedModel }: UseChatterFeatureParams): ChatterFeatureController => {
-  const [inputMode, setInputMode] = useState<'text' | 'file'>('file');
+  const [inputMode, setInputMode] = useState<ChatterInputMode>('tijori');
   const [chatterPane, setChatterPane] = useState<'analysis' | 'thread'>('analysis');
   const [textInput, setTextInput] = useState('');
+  const [isIngestingTijori, setIsIngestingTijori] = useState(false);
 
   const [batchFiles, setBatchFiles] = useState<BatchFile[]>([]);
   const [isAnalyzingBatch, setIsAnalyzingBatch] = useState(false);
@@ -360,6 +366,49 @@ export const useChatterFeature = ({ provider, selectedModel }: UseChatterFeature
     }
   }, []);
 
+  const ingestTijoriSelections = useCallback(async (concalls: TijoriConcall[]) => {
+    if (concalls.length === 0) return;
+    setIsIngestingTijori(true);
+
+    const timestamp = Date.now();
+    const newItems: BatchFile[] = concalls.map((c, index) => ({
+      id: `tijori-${c.slug || c.isin || 'item'}-${timestamp}-${index}`,
+      name: `${c.name}${c.concall_event_time ? ` — ${c.concall_event_time.slice(0, 10)}` : ''}`,
+      content: '',
+      status: 'parsing',
+    }));
+
+    setBatchFiles((prev) => [...prev, ...newItems]);
+    setInputMode('file');
+
+    for (let i = 0; i < concalls.length; i++) {
+      const concall = concalls[i];
+      const itemId = newItems[i].id;
+      try {
+        const proxyUrl = `/api/chatter/tijori/pdf?url=${encodeURIComponent(concall.transcript)}`;
+        const resp = await fetch(proxyUrl);
+        if (!resp.ok) {
+          const body = await resp.json().catch(() => null);
+          throw new Error(body?.error?.message || `PDF fetch failed (${resp.status}).`);
+        }
+        const blob = await resp.blob();
+        const file = new File([blob], `${concall.slug || 'transcript'}.pdf`, { type: 'application/pdf' });
+        const content = await parsePdfToText(file);
+
+        setBatchFiles((prev) =>
+          prev.map((f) => (f.id === itemId ? { ...f, content, status: 'ready' } : f)),
+        );
+      } catch (error: unknown) {
+        const message = (error as { message?: string })?.message || 'Failed to fetch transcript.';
+        setBatchFiles((prev) =>
+          prev.map((f) => (f.id === itemId ? { ...f, status: 'error', error: message } : f)),
+        );
+      }
+    }
+
+    setIsIngestingTijori(false);
+  }, []);
+
   const handleCopyAllChatter = useCallback(async () => {
     if (completedResults.length === 0) return;
 
@@ -434,6 +483,7 @@ export const useChatterFeature = ({ provider, selectedModel }: UseChatterFeature
     setChatterSingleState({ status: 'idle' });
     setBatchProgress(null);
     setIsAnalyzingBatch(false);
+    setIsIngestingTijori(false);
     setCopyAllStatus('idle');
     setCopyAllErrorMessage('');
     if (chatterFileInputRef.current) chatterFileInputRef.current.value = '';
@@ -466,6 +516,7 @@ export const useChatterFeature = ({ provider, selectedModel }: UseChatterFeature
 
   return {
     inputMode,
+    isIngestingTijori,
     chatterPane,
     textInput,
     batchFiles,
@@ -485,6 +536,7 @@ export const useChatterFeature = ({ provider, selectedModel }: UseChatterFeature
     handleAnalyzeText,
     handleAnalyzeBatch,
     handleChatterFileUpload,
+    ingestTijoriSelections,
     handleCopyAllChatter,
     removeBatchFile,
     retryBatchFile,

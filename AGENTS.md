@@ -47,5 +47,6 @@
 
 ## Security & Configuration Tips
 - Never commit secrets (`.env*`, API tokens).
-- Required runtime secrets are managed in Cloudflare Pages env vars (for example `GEMINI_API_KEY`, optional `VERTEX_API_KEY`, `OPENROUTER_API_KEY`).
+- Required runtime secrets are managed in Cloudflare Pages env vars (for example `GEMINI_API_KEY`, optional `VERTEX_API_KEY`, `OPENROUTER_API_KEY`, `TIJORI_API_KEY`).
+- For the Tijori concall feed in the Chatter tab, set `TIJORI_API_KEY` via `npx wrangler pages secret put TIJORI_API_KEY` and add it to `.env.local` for local `wrangler dev`. The key is consumed only by `functions/api/chatter/tijori/{list,pdf}.ts` and never sent to the client.
 - Validate request payloads on server routes and keep allowlists/retries in shared server utilities.

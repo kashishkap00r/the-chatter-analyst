@@ -30,7 +30,7 @@ export interface SessionModelState {
 }
 
 export interface ChatterSessionSlice {
-  inputMode: 'text' | 'file';
+  inputMode: 'tijori' | 'text' | 'file';
   textInput: string;
   batchFiles: BatchFile[];
   chatterSingleState: ChatterAnalysisState;

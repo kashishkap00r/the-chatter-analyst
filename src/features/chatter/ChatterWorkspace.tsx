@@ -5,6 +5,7 @@ import ThreadComposer from '../../../components/ThreadComposer';
 import { ModelType, ProviderType } from '../../../types';
 import { statusLabels, statusStyles } from '../../shared/ui/batchStatus';
 import { QuoteSkeleton } from '../../shared/ui/skeletons';
+import { TijoriPicker } from './tijori/TijoriPicker';
 import type { ChatterFeatureController } from './useChatterFeature';
 
 interface ChatterWorkspaceProps {
@@ -22,6 +23,7 @@ export const ChatterWorkspace: React.FC<ChatterWorkspaceProps> = ({
 }) => {
   const {
     inputMode,
+    isIngestingTijori,
     chatterPane,
     textInput,
     batchFiles,
@@ -41,6 +43,7 @@ export const ChatterWorkspace: React.FC<ChatterWorkspaceProps> = ({
     handleAnalyzeText,
     handleAnalyzeBatch,
     handleChatterFileUpload,
+    ingestTijoriSelections,
     handleCopyAllChatter,
     removeBatchFile,
     retryBatchFile,
@@ -57,6 +60,15 @@ export const ChatterWorkspace: React.FC<ChatterWorkspaceProps> = ({
           </header>
 
           <div className="inline-flex rounded-z-md border border-line bg-canvas p-1 mb-4 w-full">
+            <button
+              onClick={() => setInputMode('tijori')}
+              disabled={disabled}
+              className={`flex-1 rounded-z-sm py-2 text-sm font-semibold transition ${
+                inputMode === 'tijori' ? 'bg-white text-ink shadow-sm' : 'text-stone hover:text-ink'
+              } disabled:opacity-50`}
+            >
+              Tijori (Latest)
+            </button>
             <button
               onClick={() => setInputMode('file')}
               disabled={disabled}
@@ -77,7 +89,13 @@ export const ChatterWorkspace: React.FC<ChatterWorkspaceProps> = ({
             </button>
           </div>
 
-          {inputMode === 'text' ? (
+          {inputMode === 'tijori' ? (
+            <TijoriPicker
+              disabled={disabled}
+              isIngesting={isIngestingTijori}
+              onAnalyze={(selected) => ingestTijoriSelections(selected)}
+            />
+          ) : inputMode === 'text' ? (
             <textarea
               className="w-full min-h-[290px] rounded-z-md border border-line bg-brand-soft p-4 text-sm leading-relaxed outline-none focus:ring-2 focus:ring-brand"
               placeholder="Paste earnings call transcript here..."
@@ -161,12 +179,27 @@ export const ChatterWorkspace: React.FC<ChatterWorkspaceProps> = ({
           <div className="mt-5 pt-4 border-t border-line flex gap-3">
             <button
               onClick={clearChatter}
-              disabled={isChatterLoading || disabled}
+              disabled={isChatterLoading || isIngestingTijori || disabled}
               className="px-4 py-2.5 rounded-z-md border border-line text-sm font-semibold text-stone hover:text-ink disabled:opacity-50"
             >
               Clear
             </button>
-            {inputMode === 'text' ? (
+            {inputMode === 'tijori' ? (
+              <button
+                onClick={() => {
+                  void handleAnalyzeBatch();
+                }}
+                disabled={readyCount === 0 || isAnalyzingBatch || isIngestingTijori || disabled}
+                className="flex-1 rounded-z-md bg-brand text-white text-sm font-semibold py-2.5 px-4 disabled:opacity-50 hover:bg-brand/90 transition"
+                title={readyCount === 0 ? 'Fetch transcripts first using the button above' : ''}
+              >
+                {isAnalyzingBatch
+                  ? 'Processing Batch...'
+                  : readyCount === 0
+                    ? 'No transcripts queued'
+                    : `Analyze ${readyCount} Queued`}
+              </button>
+            ) : inputMode === 'text' ? (
               <button
                 onClick={() => {
                   void handleAnalyzeText();

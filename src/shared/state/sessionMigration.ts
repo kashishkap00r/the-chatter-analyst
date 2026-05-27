@@ -146,8 +146,8 @@ const normalizeRecoveredPlotlineFile = (file: PlotlineBatchFile): PlotlineBatchF
 };
 
 
-const resolveInputMode = (value: unknown): 'text' | 'file' =>
-  value === 'text' || value === 'file' ? value : 'file';
+const resolveInputMode = (value: unknown): 'tijori' | 'text' | 'file' =>
+  value === 'text' || value === 'file' || value === 'tijori' ? value : 'tijori';
 
 const resolveAppMode = (value: unknown): 'chatter' | 'points' | 'plotline' =>
   typeof value === 'string' && APP_MODE_VALUES.has(value) ? (value as 'chatter' | 'points' | 'plotline') : 'chatter';
