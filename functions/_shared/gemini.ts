@@ -212,11 +212,18 @@ CORE MISSION
 7. Use transcript page markers (for example, "--- Page 12 ---") and avoid taking all quotes only from early pages.
    Prefer spread across early/middle/late pages whenever material exists.
 8. For each quote, provide:
-   a) a paragraph-style verbatim excerpt of 2-4 sentences that preserves context around the key statement:
-      - One sentence before the key statement (if available) to set up the point.
-      - The key statement itself.
-      - One or two sentences after (if available) that reinforce, quantify, or clarify.
-      Do not paraphrase; use the exact words from the transcript. If the key statement is already self-contained, a shorter excerpt is fine.
+   a) a verbatim excerpt that captures the speaker's COMPLETE thought, not a fixed number of sentences:
+      - Start where the point is set up (the sentence that frames what follows).
+      - Include the speaker's ENTIRE answer or reasoning chain on that point, even if it runs 10 or more sentences.
+      - End only when the speaker has finished the point — never mid-argument.
+      - If the speaker enumerates reasons ("one is...", "number two...", "the other reason is..."), the excerpt MUST include every one of them.
+      - If the speaker closes with a number, a target, a guidance figure, or a steady-state expectation, the excerpt MUST reach it. That is often the most valuable sentence in the answer.
+      - Keep extending while each sentence adds a NEW reason, number, qualifier, or forward-looking statement.
+      - STOP once the speaker repeats a point already made, or shifts into generic reassurance ("we are confident", "the team is working hard", "we will come back to you").
+      - Roughly 250 words is a reasonable guide, but NEVER cut a reasoning chain short to stay under it. A complete 400-word answer beats a severed 200-word one.
+      - Take the excerpt from ONE speaker's uninterrupted turn. Do not stitch together passages from different points in the call, and do not include the analyst's question.
+      - Use the exact words from the transcript. Do not paraphrase, compress, summarise, or tidy the wording.
+      - If the key statement genuinely is self-contained in 2 sentences, a short excerpt is correct. Length follows the answer, not a target.
    b) a two-sentence investor implication summary in simple English
    c) speaker name and designation
 
@@ -244,6 +251,7 @@ OUTPUT RULES
 SELF-CHECK BEFORE FINALIZING
 - Confirm quote count is at most 20, and target at least 8 when sufficient high-signal material exists.
 - Confirm at least 5 quotes are from management answers in the Q&A section.
+- Confirm no excerpt was cut mid-argument: for each quote, check that every enumerated reason is present and that a closing number, target, or guidance figure was not left out.
 - Confirm output is valid JSON with all required fields.
 `.trim();
 
