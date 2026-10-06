@@ -36,6 +36,17 @@ const MAX_REMOTE_HTML_BYTES = 6 * 1024 * 1024;
 const MAX_EDITION_TEXT_CHARS = 2_000_000;
 const MAX_REDIRECT_HOPS = 6;
 const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
+const MAX_FETCH_ATTEMPTS = 3;
+const FETCH_ATTEMPT_TIMEOUT_MS = 20_000;
+const MAX_TOTAL_FETCH_MS = 45_000;
+const FETCH_RETRY_BASE_DELAY_MS = 600;
+const FETCH_RETRY_MAX_DELAY_MS = 4_000;
+const MAX_HONORED_RETRY_AFTER_MS = 5_000;
+// Substack sits behind Cloudflare and rate limits Workers' shared egress IPs, so a
+// 429 here is usually transient and clears on the next attempt.
+const RETRYABLE_FETCH_STATUS_CODES = new Set([
+  408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524,
+]);
 const ALLOWED_EXACT_HOSTS = new Set(["thechatter.zerodha.com"]);
 const ALLOWED_SUBSTACK_SUFFIX = ".substack.com";
 
@@ -286,8 +297,67 @@ const normalizeTextInput = (value: string): string =>
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-const companyHeaderRegex = /^(.+?)\s*\|\s*(Large Cap|Mid Cap|Small Cap|Micro Cap)\s*\|\s*(.+)$/i;
+const marketCapRegex = /^(Large Cap|Mid Cap|Small Cap|Micro Cap)$/i;
 const speakerLineRegex = /^[-]\s*(.+)$/;
+const MAX_SECTION_HEADER_CHARS = 240;
+
+interface SectionHeader {
+  name: string;
+  // Null for non-company sections (regulator speeches, interviews); filled from the category heading.
+  marketCapCategory: string | null;
+  // Industry for companies, speech topic for regulators. Null when the header omits it.
+  topic: string | null;
+}
+
+// Section headers are pipe-delimited lines in a few shapes:
+//   "Tata Steel | Large Cap | Metals"                        (classic company)
+//   "Bajaj Auto | Large Cap"                                 (company, industry omitted)
+//   "Reserve Bank of India | Dr. Poonam Gupta Address | Macro Economy & Financial Stability"
+//   "Insurance Regulatory and Development Authority of India | Insurance Decommissioned"
+const parseSectionHeader = (line: string): SectionHeader | null => {
+  if (!line.includes("|") || line.length > MAX_SECTION_HEADER_CHARS) return null;
+  if (/^["\-•]/.test(line)) return null;
+
+  const segments = line
+    .split("|")
+    .map((segment) => cleanupParagraph(segment))
+    .filter((segment) => segment.length > 0);
+  if (segments.length === 0 || segments[0].length < 2) return null;
+
+  const [name, ...rest] = segments;
+  if (rest.length > 0 && marketCapRegex.test(rest[0])) {
+    return {
+      name,
+      marketCapCategory: rest[0],
+      topic: rest.length > 1 ? rest.slice(1).join(" | ") : null,
+    };
+  }
+
+  // "Rohit Jain on Building Deep and Resilient Financial Markets … | Reserve Bank of India"
+  // puts the speech title first; the institution is the short trailing segment.
+  if (rest.length === 1 && name.length > 60 && rest[0].length <= 50) {
+    return { name: rest[0], marketCapCategory: null, topic: name };
+  }
+
+  return {
+    name,
+    marketCapCategory: null,
+    topic: rest.length > 0 ? rest[rest.length - 1] : null,
+  };
+};
+
+// Category headings ("Regulators", "Automobiles") are the <h1> above a header. In plain
+// text they show up as a short bare line; speaker and summary lines carry commas or
+// sentence punctuation, so they do not qualify.
+const looksLikeCategoryHeading = (line: string | undefined): line is string => {
+  if (!line || line.length > 50) return false;
+  if (/[|",]/.test(line) || /[.!?:;]$/.test(line)) return false;
+  if (/^[-•\[]/.test(line)) return false;
+  return line.split(/\s+/).length <= 6;
+};
+
+const normalizeCategoryLabel = (category: string): string =>
+  /^regulators?$/i.test(category) ? "Regulator" : category;
 
 const slugify = (value: string): string =>
   value
@@ -352,8 +422,24 @@ const looksLikeNoiseHeading = (line: string): boolean => {
 };
 
 const isConcallLine = (line: string): boolean => /\bconcall\b/i.test(line);
+// "[ Concall ]" for companies; "[ Speech ]", "[ Interview ]" etc. for regulators.
+const sourceMarkerRegex = /^\[\s*[^\[\]]{2,40}\s*\]$/;
+const isSourceMarkerLine = (line: string): boolean => isConcallLine(line) || sourceMarkerRegex.test(line);
 const looksLikeQuoteStart = (line: string): boolean => line.includes('"');
 const inlineSpeakerRegex = /^(.*")\s*-\s*([^"].+)$/;
+
+const isQuoteClosed = (quoteLines: string[]): boolean => {
+  const quoteMarks = quoteLines.join(" ").split('"').length - 1;
+  return quoteMarks >= 2 && quoteMarks % 2 === 0;
+};
+
+// Some editions drop the "—" before the speaker: "Dr. Poonam Gupta, Deputy Governor, Reserve Bank of India".
+const looksLikeBareSpeakerLine = (line: string): boolean =>
+  line.length <= 160 &&
+  !line.includes('"') &&
+  line.includes(",") &&
+  !/[.!?;:]$/.test(line) &&
+  /^[A-Z]/.test(line);
 
 const parseSpeaker = (line: string): { speakerName: string; speakerDesignation: string } => {
   const speakerRaw = line.replace(speakerLineRegex, "$1").trim();
@@ -419,7 +505,7 @@ const parseCompanyQuotes = (
   for (const rawLine of lines) {
     const line = cleanupParagraph(rawLine);
     if (!line) continue;
-    if (isConcallLine(line)) continue;
+    if (isSourceMarkerLine(line)) continue;
 
     const speakerMatch = line.match(speakerLineRegex);
     if (speakerMatch && quoteBuffer && quoteBuffer.length > 0) {
@@ -433,6 +519,11 @@ const parseCompanyQuotes = (
       if (inlineSpeaker) {
         quoteBuffer.push(inlineSpeaker[1]);
         pushQuote(quoteBuffer.join(" "), inlineSpeaker[2]);
+        quoteBuffer = null;
+        continue;
+      }
+      if (isQuoteClosed(quoteBuffer) && looksLikeBareSpeakerLine(line)) {
+        pushQuote(quoteBuffer.join(" "), line);
         quoteBuffer = null;
         continue;
       }
@@ -462,7 +553,7 @@ const parseCompanyQuotes = (
   };
 };
 
-const parseThreadEdition = (
+export const parseThreadEdition = (
   rawText: string,
   metadata: {
     editionUrl?: string;
@@ -479,36 +570,41 @@ const parseThreadEdition = (
   const editionDate = extractEditionDate(lines);
   const coverageStats = extractCoverageStats(normalizedText);
 
-  const companyLineIndexes: number[] = [];
+  const sectionHeaders: { index: number; header: SectionHeader; category: string | null }[] = [];
+  let currentCategory: string | null = null;
   for (let i = 0; i < lines.length; i++) {
-    if (companyHeaderRegex.test(lines[i])) {
-      companyLineIndexes.push(i);
+    const header = parseSectionHeader(lines[i]);
+    if (!header) continue;
+    // An <h1> category covers every header beneath it until the next one.
+    if (looksLikeCategoryHeading(lines[i - 1])) {
+      currentCategory = lines[i - 1];
     }
+    sectionHeaders.push({ index: i, header, category: currentCategory });
   }
 
   const companies: ThreadCompanyGroup[] = [];
   let sourceOrder = 1;
 
-  for (let index = 0; index < companyLineIndexes.length; index++) {
-    const headerIndex = companyLineIndexes[index];
-    const nextHeaderIndex = companyLineIndexes[index + 1] ?? lines.length;
-    const headerLine = lines[headerIndex];
-    const headerMatch = headerLine.match(companyHeaderRegex);
-    if (!headerMatch) continue;
-
-    const companyName = cleanupParagraph(headerMatch[1]);
-    const marketCapCategory = cleanupParagraph(headerMatch[2]);
-    const industry = cleanupParagraph(headerMatch[3]);
-
+  for (let index = 0; index < sectionHeaders.length; index++) {
+    const { index: headerIndex, header, category } = sectionHeaders[index];
+    const nextHeaderIndex = sectionHeaders[index + 1]?.index ?? lines.length;
     const sectionLines = lines.slice(headerIndex + 1, nextHeaderIndex);
 
-    const concallIndex = sectionLines.findIndex((line) => isConcallLine(line));
+    const markerIndex = sectionLines.findIndex((line) => isSourceMarkerLine(line));
+
+    // Downstream thread generation requires every field to be non-empty, so fall back
+    // to the category heading when the header leaves one out. Non-company sections in
+    // the edition are regulator/policymaker addresses, hence the "Regulator" default.
+    const companyName = header.name;
+    const marketCapCategory = header.marketCapCategory ?? (category ? normalizeCategoryLabel(category) : "Regulator");
+    const industry = header.topic ?? category ?? "General";
+
     const descriptionLines = sectionLines
-      .slice(0, concallIndex >= 0 ? concallIndex : Math.min(sectionLines.length, 4))
+      .slice(0, markerIndex >= 0 ? markerIndex : Math.min(sectionLines.length, 4))
       .filter((line) => !looksLikeNoiseHeading(line));
     const companyDescription = cleanupParagraph(descriptionLines.join(" ")) || "Company overview not available.";
 
-    const quoteRegionStart = concallIndex >= 0 ? concallIndex + 1 : 0;
+    const quoteRegionStart = markerIndex >= 0 ? markerIndex + 1 : 0;
     const quoteRegion = sectionLines.slice(quoteRegionStart);
 
     const base = {
@@ -542,27 +638,78 @@ const parseThreadEdition = (
   };
 };
 
-const fetchTextFromUrl = async (substackUrl: string): Promise<string> => {
+class RetryableFetchError extends Error {
+  readonly status: number | null;
+  readonly retryAfterMs: number | null;
+
+  constructor(message: string, status: number | null, retryAfterMs: number | null = null) {
+    super(message);
+    this.name = "RetryableFetchError";
+    this.status = status;
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+const sleep = async (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+const computeFetchRetryDelayMs = (attempt: number): number => {
+  const exponential = Math.min(
+    FETCH_RETRY_MAX_DELAY_MS,
+    FETCH_RETRY_BASE_DELAY_MS * (2 ** (attempt - 1)),
+  );
+  const jitter = Math.floor(Math.random() * Math.max(50, Math.floor(exponential / 3)));
+  return exponential + jitter;
+};
+
+const parseRetryAfterMs = (headerValue: string | null): number | null => {
+  if (!headerValue) return null;
+
+  const trimmed = headerValue.trim();
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(MAX_HONORED_RETRY_AFTER_MS, Math.ceil(seconds * 1000));
+  }
+
+  const dateMs = Date.parse(trimmed);
+  if (!Number.isNaN(dateMs)) {
+    const deltaMs = dateMs - Date.now();
+    if (deltaMs > 0) {
+      return Math.min(MAX_HONORED_RETRY_AFTER_MS, deltaMs);
+    }
+  }
+
+  return null;
+};
+
+const fetchHtmlOnce = async (startUrl: URL, timeoutMs: number): Promise<string> => {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort("timeout"), 20_000);
+  const timeout = setTimeout(() => controller.abort("timeout"), timeoutMs);
 
   try {
-    let currentUrl = new URL(substackUrl);
-    const initialRestriction = getUrlRestrictionReason(currentUrl);
-    if (initialRestriction) {
-      throw new Error(initialRestriction);
-    }
+    let currentUrl = startUrl;
 
     for (let redirectHop = 0; redirectHop <= MAX_REDIRECT_HOPS; redirectHop++) {
-      const response = await fetch(currentUrl.toString(), {
-        method: "GET",
-        redirect: "manual",
-        headers: {
-          "user-agent": "Mozilla/5.0 (compatible; ChatterAnalystBot/1.0)",
-          accept: "text/html,application/xhtml+xml",
-        },
-        signal: controller.signal,
-      });
+      let response: Response;
+      try {
+        response = await fetch(currentUrl.toString(), {
+          method: "GET",
+          redirect: "manual",
+          headers: {
+            "user-agent": "Mozilla/5.0 (compatible; ChatterAnalystBot/1.0)",
+            accept: "text/html,application/xhtml+xml",
+          },
+          signal: controller.signal,
+        });
+      } catch (networkError: any) {
+        // Network blips and per-attempt timeouts are worth another try.
+        throw new RetryableFetchError(
+          `Unable to fetch URL: ${String(networkError?.message || networkError || "network failure")}.`,
+          null,
+        );
+      }
 
       if (REDIRECT_STATUS_CODES.has(response.status)) {
         const location = response.headers.get("location");
@@ -584,7 +731,15 @@ const fetchTextFromUrl = async (substackUrl: string): Promise<string> => {
       }
 
       if (!response.ok) {
-        throw new Error(`Unable to fetch URL. Status ${response.status}.`);
+        const message = `Unable to fetch URL. Status ${response.status}.`;
+        if (RETRYABLE_FETCH_STATUS_CODES.has(response.status)) {
+          throw new RetryableFetchError(
+            message,
+            response.status,
+            parseRetryAfterMs(response.headers.get("retry-after")),
+          );
+        }
+        throw new Error(message);
       }
 
       const html = await response.text();
@@ -607,6 +762,61 @@ const fetchTextFromUrl = async (substackUrl: string): Promise<string> => {
   } finally {
     clearTimeout(timeout);
   }
+};
+
+export const fetchTextFromUrl = async (substackUrl: string): Promise<string> => {
+  const startUrl = new URL(substackUrl);
+  const initialRestriction = getUrlRestrictionReason(startUrl);
+  if (initialRestriction) {
+    throw new Error(initialRestriction);
+  }
+
+  const deadline = Date.now() + MAX_TOTAL_FETCH_MS;
+  let lastError: RetryableFetchError | null = null;
+
+  for (let attempt = 1; attempt <= MAX_FETCH_ATTEMPTS; attempt++) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      break;
+    }
+
+    try {
+      return await fetchHtmlOnce(startUrl, Math.min(FETCH_ATTEMPT_TIMEOUT_MS, remainingMs));
+    } catch (attemptError: any) {
+      // Blocked redirect targets, oversized pages and empty bodies are permanent —
+      // only RetryableFetchError earns another attempt.
+      if (!(attemptError instanceof RetryableFetchError)) {
+        throw attemptError;
+      }
+
+      lastError = attemptError;
+      if (attempt >= MAX_FETCH_ATTEMPTS) {
+        break;
+      }
+
+      const waitMs = attemptError.retryAfterMs ?? computeFetchRetryDelayMs(attempt);
+      if (deadline - Date.now() <= waitMs) {
+        break;
+      }
+
+      console.log(
+        JSON.stringify({
+          event: "thread_ingest_fetch_retry",
+          host: startUrl.host,
+          attempt,
+          maxAttempts: MAX_FETCH_ATTEMPTS,
+          status: attemptError.status,
+          waitMs,
+        }),
+      );
+      await sleep(waitMs);
+    }
+  }
+
+  const baseMessage = lastError?.message || "Unable to fetch URL.";
+  throw new Error(
+    `${baseMessage} Retried ${MAX_FETCH_ATTEMPTS} times without success — the source is likely rate limiting this request. Please try again in a minute.`,
+  );
 };
 
 export async function onRequestPost(context: any): Promise<Response> {
