@@ -10,7 +10,7 @@ export type OpenRouterChatterTier = 'standard' | 'premium';
 export const GEMINI_MODEL_OPTIONS: ModelOption[] = [
   { value: ModelType.FLASH_3, label: 'Gemini 3 Flash (Balanced)' },
   { value: ModelType.FLASH, label: 'Gemini 2.5 Flash (Fast)' },
-  { value: ModelType.PRO, label: 'Gemini 3 Pro (Deep)' },
+  { value: ModelType.PRO, label: 'Gemini 3.1 Pro (Deep)' },
 ];
 
 export const OPENROUTER_CHATTER_TIER_OPTIONS: Array<{

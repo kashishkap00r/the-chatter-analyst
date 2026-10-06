@@ -194,7 +194,7 @@ export enum ProviderType {
 }
 
 export enum ModelType {
-  PRO = 'gemini-3-pro-preview',
+  PRO = 'gemini-3.1-pro-preview',
   FLASH_3 = 'gemini-3-flash-preview',
   FLASH = 'gemini-2.5-flash',
   OPENROUTER_MINIMAX = 'minimax/minimax-01',

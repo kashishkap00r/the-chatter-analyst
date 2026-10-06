@@ -46,6 +46,10 @@ interface LegacyPersistedAppSessionV1 {
 }
 
 const MODEL_TYPE_VALUES = new Set<string>(Object.values(ModelType) as string[]);
+// Model IDs Google has retired, mapped to their successor so a saved choice survives.
+const RETIRED_MODEL_REPLACEMENTS: Record<string, ModelType> = {
+  'gemini-3-pro-preview': ModelType.PRO,
+};
 const PROVIDER_TYPE_VALUES = new Set<string>(Object.values(ProviderType) as string[]);
 const APP_MODE_VALUES = new Set<string>(['chatter', 'points', 'plotline']);
 const POINTS_REUPLOAD_REQUIRED_MESSAGE = 'Original PDF cannot be restored automatically. Re-upload to analyze.';
@@ -157,8 +161,11 @@ const resolveProvider = (value: unknown): ProviderType =>
     ? (value as ProviderType)
     : ProviderType.GEMINI;
 
-const resolveModel = (value: unknown, fallback: ModelType): ModelType =>
-  typeof value === 'string' && MODEL_TYPE_VALUES.has(value) ? (value as ModelType) : fallback;
+const resolveModel = (value: unknown, fallback: ModelType): ModelType => {
+  if (typeof value !== 'string') return fallback;
+  if (MODEL_TYPE_VALUES.has(value)) return value as ModelType;
+  return RETIRED_MODEL_REPLACEMENTS[value] ?? fallback;
+};
 
 const resolveScopedOpenRouterModel = (
   value: unknown,

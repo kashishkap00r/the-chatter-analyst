@@ -54,4 +54,24 @@ describe('sessionMigration openrouter chatter tier migration', () => {
     expect(migrated?.models.openRouterChatterTier).toBe('standard');
     expect(migrated?.models.openRouterModel).toBe(ModelType.OPENROUTER_DEEPSEEK_V32);
   });
+
+  it('moves a saved choice of the retired Gemini 3 Pro onto its successor', () => {
+    const migrated = migratePersistedSessionSnapshot({
+      ...baseSnapshot,
+      provider: ProviderType.GEMINI,
+      models: {
+        geminiModel: 'gemini-3-pro-preview',
+        openRouterModel: ModelType.OPENROUTER_DEEPSEEK_V32,
+        geminiPointsModel: 'gemini-3-pro-preview',
+        openRouterPointsModel: ModelType.OPENROUTER_QWEN25_VL_32B,
+        geminiPlotlineModel: 'gemini-3-pro-preview',
+        openRouterPlotlineModel: ModelType.OPENROUTER_MINIMAX_M25,
+      },
+    });
+
+    expect(migrated?.models.geminiModel).toBe(ModelType.PRO);
+    expect(migrated?.models.geminiPointsModel).toBe(ModelType.PRO);
+    expect(migrated?.models.geminiPlotlineModel).toBe(ModelType.PRO);
+    expect(ModelType.PRO).toBe('gemini-3.1-pro-preview');
+  });
 });
